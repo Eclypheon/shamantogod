@@ -13,12 +13,23 @@ interface Actor {
   kind: 'brave' | 'preacher' | 'warrior' | 'firewarrior' | 'wildman';
 }
 
+interface RivalShamanActor {
+  sprite: Phaser.GameObjects.Sprite;
+  ring: Phaser.GameObjects.Arc;
+  label: Phaser.GameObjects.Text;
+  tribe: 'red' | 'green' | 'yellow';
+  vx: number;
+  vy: number;
+  castTimer: number;
+}
+
 export class PlanetScene extends Phaser.Scene {
   private state!: GameState;
   private onHudSync!: () => void;
   private onToast!: (msg: string) => void;
 
   private shaman!: Phaser.GameObjects.Sprite;
+  private shamanLabel!: Phaser.GameObjects.Text;
   private rangeCircle!: Phaser.GameObjects.Arc;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd!: Record<'W' | 'A' | 'S' | 'D', Phaser.Input.Keyboard.Key>;
@@ -27,9 +38,11 @@ export class PlanetScene extends Phaser.Scene {
   private terrainGfx!: Phaser.GameObjects.Graphics;
   private buildingSprites: Phaser.GameObjects.Sprite[] = [];
   private actors: Actor[] = [];
+  private rivalShamans: RivalShamanActor[] = [];
   private shamanDir = 5;
   private castAnimTimer = 0;
   private currentPlanetRendered = -1;
+  private renderedAllied = false;
   private simAccum = 0;
 
   constructor(state: GameState, onHudSync: () => void, onToast: (msg: string) => void) {
@@ -61,8 +74,14 @@ export class PlanetScene extends Phaser.Scene {
     this.terrainGfx = this.add.graphics();
 
     this.shaman = this.add.sprite(WORLD_W / 2, WORLD_H / 2, 'units', 'shaman_blue_stand_d5_00');
-    this.shaman.setOrigin(0.5, 1.0).setScale(1.4).setDepth(500);
+    this.shaman.setOrigin(0.5, 1.0).setScale(1.45).setDepth(500);
     this.shaman.play('shaman_blue_stand_d5');
+    this.shamanLabel = this.add.text(this.shaman.x, this.shaman.y - 68, 'YOU (Shaman)', {
+      fontSize: '11px',
+      color: '#4ea8de',
+      backgroundColor: 'rgba(13,19,33,0.75)',
+      padding: { x: 4, y: 1 },
+    }).setOrigin(0.5, 1).setDepth(950);
 
     this.rangeCircle = this.add.circle(this.shaman.x, this.shaman.y, 185, 0x4ea8de, 0.08);
     this.rangeCircle.setStrokeStyle(2, 0x4ea8de, 0.65).setDepth(5);
@@ -138,8 +157,15 @@ export class PlanetScene extends Phaser.Scene {
     this.buildingSprites = [];
     for (const a of this.actors) a.sprite.destroy();
     this.actors = [];
+    for (const rs of this.rivalShamans) {
+      rs.sprite.destroy();
+      rs.ring.destroy();
+      rs.label.destroy();
+    }
+    this.rivalShamans = [];
 
     const p = this.state.planets[cfg.id];
+    this.renderedAllied = p.allied;
     // Player Huts & Stone Head near center-left
     const hutCount = Math.min(8, p.hutsBuilt);
     for (let i = 0; i < hutCount; i++) {
@@ -165,7 +191,35 @@ export class PlanetScene extends Phaser.Scene {
       );
     }
 
-    // Spawn representative roaming units
+    // Spawn 1 Shaman per rival tribe (becomes Ally Shaman when allied on Planet 5+)
+    cfg.rivals.forEach((tribe, idx) => {
+      const isAlly = p.allied && cfg.allianceTribe === tribe;
+      const angle = (idx / Math.max(1, cfg.rivals.length)) * Math.PI * 2 + 0.6;
+      const sx = WORLD_W / 2 + Math.cos(angle) * 340;
+      const sy = WORLD_H / 2 + Math.sin(angle) * 210;
+      const ringColor = isAlly ? 0x52b788 : tribe === 'red' ? 0xe63946 : tribe === 'green' ? 0x2ec4b6 : 0xf4c95d;
+      const ring = this.add.circle(sx, sy, 28, ringColor, 0.14).setStrokeStyle(2, ringColor, 0.85).setDepth(4);
+      const sp = this.add.sprite(sx, sy, 'units', `shaman_${tribe}_walk_d5_00`).setOrigin(0.5, 1).setScale(1.35).setDepth(sy);
+      if (this.anims.exists(`shaman_${tribe}_walk_d5`)) sp.play(`shaman_${tribe}_walk_d5`);
+      const tag = isAlly ? `ALLY (${tribe.toUpperCase()})` : `RIVAL (${tribe.toUpperCase()})`;
+      const label = this.add.text(sx, sy - 64, tag, {
+        fontSize: '10px',
+        color: isAlly ? '#52b788' : '#ffb4a2',
+        backgroundColor: 'rgba(13,19,33,0.75)',
+        padding: { x: 4, y: 1 },
+      }).setOrigin(0.5, 1).setDepth(950);
+      this.rivalShamans.push({
+        sprite: sp,
+        ring,
+        label,
+        tribe,
+        vx: Phaser.Math.FloatBetween(-45, 45),
+        vy: Phaser.Math.FloatBetween(-32, 32),
+        castTimer: Phaser.Math.FloatBetween(2, 6),
+      });
+    });
+
+    // Spawn representative roaming followers (smaller than Shamans)
     this.spawnActors('blue', 'brave', Math.min(8, p.braves), WORLD_W * 0.45, WORLD_H * 0.5);
     this.spawnActors('blue', 'preacher', Math.min(4, p.preachers), WORLD_W * 0.45, WORLD_H * 0.5);
     this.spawnActors('blue', 'warrior', Math.min(6, p.warriors), WORLD_W * 0.48, WORLD_H * 0.5);
@@ -196,7 +250,7 @@ export class PlanetScene extends Phaser.Scene {
               : kind === 'warrior'
                 ? `warrior_${tribe}_run_d5`
                 : `brave_${tribe}_walk_d5`;
-      const sp = this.add.sprite(x, y, 'units').setOrigin(0.5, 1).setScale(1.15).setDepth(y);
+      const sp = this.add.sprite(x, y, 'units').setOrigin(0.5, 1).setScale(0.95).setDepth(y);
       if (this.anims.exists(animKey)) sp.play(animKey);
       this.actors.push({
         sprite: sp,
@@ -244,7 +298,8 @@ export class PlanetScene extends Phaser.Scene {
 
   update(_time: number, deltaMs: number): void {
     const dt = deltaMs / 1000;
-    if (this.currentPlanetRendered !== this.state.activePlanetId) {
+    const activeP = this.state.planets[this.state.activePlanetId];
+    if (this.currentPlanetRendered !== this.state.activePlanetId || this.renderedAllied !== activeP.allied) {
       this.rebuildPlanetVisuals();
     }
 
@@ -282,6 +337,21 @@ export class PlanetScene extends Phaser.Scene {
 
     if (this.castAnimTimer > 0) this.castAnimTimer -= dt;
     this.shaman.setDepth(this.shaman.y);
+    this.shamanLabel.setPosition(this.shaman.x, this.shaman.y - 68);
+
+    for (const rs of this.rivalShamans) {
+      rs.sprite.x = (rs.sprite.x + rs.vx * dt + WORLD_W) % WORLD_W;
+      rs.sprite.y = (rs.sprite.y + rs.vy * dt + WORLD_H) % WORLD_H;
+      rs.sprite.setDepth(rs.sprite.y);
+      rs.ring.setPosition(rs.sprite.x, rs.sprite.y);
+      rs.label.setPosition(rs.sprite.x, rs.sprite.y - 64);
+      rs.castTimer -= dt;
+      if (rs.castTimer <= 0) {
+        rs.castTimer = Phaser.Math.FloatBetween(4, 8);
+        const vfx = this.add.sprite(rs.sprite.x + Phaser.Math.Between(-40, 40), rs.sprite.y + Phaser.Math.Between(-25, 25), 'world', 'vfx_fireball').setScale(0.5).setDepth(900);
+        this.tweens.add({ targets: vfx, scale: 1.5, alpha: 0, duration: 450, onComplete: () => vfx.destroy() });
+      }
+    }
 
     const range = getCastRangePx(this.state, this.state.activePlanetId);
     this.rangeCircle.setVisible(Number.isFinite(range));

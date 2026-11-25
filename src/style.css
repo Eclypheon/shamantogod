@@ -230,3 +230,25 @@ html, body, #app, #game-container {
     opacity: 0.45;
   }
 }
+
+.landscape-hint {
+  display: none;
+}
+
+@media (orientation: portrait) and (max-width: 899px) {
+  .landscape-hint {
+    display: block;
+    position: fixed;
+    left: 50%;
+    bottom: 84px;
+    transform: translateX(-50%);
+    background: rgba(13, 19, 33, 0.92);
+    border: 1px solid var(--gold);
+    color: var(--gold);
+    padding: 5px 10px;
+    border-radius: 6px;
+    font-size: 11px;
+    pointer-events: none;
+    z-index: 25;
+  }
+}

@@ -329,6 +329,32 @@ export function stepSimulation(state: GameState, dtSec: number): void {
       }
     }
 
+    // Rival Shamans (1-3 per planet) actively build huts, train troops, and raid unless allied
+    const activeRivals = cfg.rivals.filter((r) => !(p.allied && r === cfg.allianceTribe));
+    const rivalCount = activeRivals.length;
+    if (isActive && rivalCount > 0) {
+      // Rival Shamans train enemy followers & build huts if not yet conquered
+      if (!p.conquered && p.enemyHutsRemaining > 0 && Math.random() < 0.06 * rivalCount * dtSec) {
+        p.enemyPop = Math.min(cfg.initialEnemyPop + p.enemyHutsRemaining * 4, p.enemyPop + 1);
+      }
+      if (!p.conquered && p.enemyHutsRemaining > 0 && p.enemyHutsRemaining < cfg.initialEnemyHuts && Math.random() < 0.012 * rivalCount * dtSec) {
+        p.enemyHutsRemaining += 1;
+      }
+    }
+
+    // Ally Shaman (when allied on Planet 5+) helps attack remaining rivals
+    if (p.allied && activeRivals.length > 0 && Math.random() < 0.12 * dtSec) {
+      if (p.enemyPop > 0) {
+        p.enemyPop -= 1;
+        p.swarmKills += 1;
+        state.totalSwarmKills += 1;
+        state.divineEssence += 0.15;
+      } else if (p.enemyHutsRemaining > 0) {
+        p.enemyHutsRemaining -= 1;
+        p.passiveDestruction += 1;
+      }
+    }
+
     // Endless Swarm pressure on active planet
     if (isActive && Math.random() < 0.08 * cfg.swarmStrength * dtSec) {
       if (p.loyalPop > 3 && p.warriors + p.fireWarriors < cfg.swarmStrength) {

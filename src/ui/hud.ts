@@ -73,6 +73,7 @@ export class HudController {
       </div>
 
       ${this.toastMsg ? `<div class="toast">${this.toastMsg}</div>` : ''}
+      <div class="landscape-hint">Rotate to landscape for best PWA play</div>
 
       <div class="hud-panel drawer ${this.activeTab !== 'none' ? 'open' : ''}">
         ${this.renderDrawerContent()}
