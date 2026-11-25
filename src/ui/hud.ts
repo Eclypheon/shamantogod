@@ -1,6 +1,6 @@
 import { META_UPGRADES, PLANETS, SPELLS, type MetaUpgradeConfig } from '../game/data';
 import {
-  buildGuardTower,
+  BUILDING_COSTS,
   buyMetaUpgrade,
   computeDominance,
   formAlliance,
@@ -13,8 +13,8 @@ import {
   isCampaignWon,
   isMetaNodeUnlocked,
   isSpellUnlocked,
+  orderBuilding,
   prestigeToPlanet,
-  rebalanceUnits,
   resetGame,
   saveGame,
   type GameState,
@@ -669,29 +669,39 @@ export class HudController {
     let body = '';
 
     if (this.activeTab === 'tribe') {
-      title = `Tribe Decree · Planet ${ROMAN[cfg.id - 1] ?? cfg.id}`;
-      const r = this.state.ratios;
+      title = `Tribe Decrees · Planet ${ROMAN[cfg.id - 1] ?? cfg.id}`;
+      const towerCost = BUILDING_COSTS.guard_tower * (p.towersOrdered + 1);
       body = `
         <div class="scroll-card">
           Huts Built: <strong>${p.hutsBuilt}</strong> · Mana/sec: <strong>+${getPlanetManaPerSec(this.state, cfg.id).toFixed(1)}</strong><br/>
-          ${p.hutsBuilt === 0 ? '<small>Convert Wildmen to chop trees and raise your first Hut.</small>' : ''}
+          <small>${p.hutsBuilt < 3 ? 'Braves chop trees to raise Huts. At 3 Huts, pairs enter Huts to breed new Braves.' : 'Pairs of Braves breed inside Huts while others gather timber or fight.'}</small>
         </div>
-        ${
-          p.hutsBuilt >= 1
-            ? `<div class="scroll-card">
-                <div class="slider-row"><span>Braves (${p.braves})</span><input type="range" min="10" max="80" value="${r.brave}" data-ratio="brave"/><span data-rval="brave">${r.brave}%</span></div>
-                <div class="slider-row"><span>Preachers (${p.preachers})</span><input type="range" min="0" max="60" value="${r.preacher}" data-ratio="preacher"/><span data-rval="preacher">${r.preacher}%</span></div>
-                <div class="slider-row"><span>Warriors (${p.warriors})</span><input type="range" min="0" max="70" value="${r.warrior}" data-ratio="warrior"/><span data-rval="warrior">${r.warrior}%</span></div>
-                <div class="slider-row"><span>Fire War. (${p.fireWarriors})</span><input type="range" min="0" max="60" value="${r.fireWarrior}" data-ratio="fireWarrior"/><span data-rval="fireWarrior">${r.fireWarrior}%</span></div>
-              </div>
-              <div class="scroll-card" style="display:flex;gap:6px;align-items:center;justify-content:space-between;">
-                <span>Guard Towers: <strong>${p.towersBuilt}/4</strong></span>
-                <button class="btn" ${p.towersBuilt >= 4 || this.state.mana < 150 * (p.towersBuilt + 1) ? 'disabled' : ''} data-action="build-tower">
-                  ${p.towersBuilt >= 4 ? 'Maxed' : `Build (${150 * (p.towersBuilt + 1)} M)`}
-                </button>
-              </div>`
-            : ''
-        }
+        <div class="scroll-card" style="display:flex;flex-direction:column;gap:7px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
+            <div><strong>Warrior Training Hut</strong><br/><small>Trains Warriors who fight enemies</small></div>
+            <button class="btn ${p.warriorHutBuilt ? 'active' : ''}" ${p.warriorHutOrdered || p.warriorHutBuilt || p.hutsBuilt < 1 || this.state.mana < BUILDING_COSTS.warrior_hut ? 'disabled' : ''} data-order="warrior_hut">
+              ${p.warriorHutBuilt ? 'Built' : p.warriorHutOrdered ? 'Building...' : `${BUILDING_COSTS.warrior_hut} M`}
+            </button>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
+            <div><strong>Temple</strong><br/><small>Trains Preachers who convert enemies</small></div>
+            <button class="btn ${p.templeBuilt ? 'active' : ''}" ${p.templeOrdered || p.templeBuilt || !p.warriorHutBuilt || this.state.mana < BUILDING_COSTS.temple ? 'disabled' : ''} data-order="temple">
+              ${p.templeBuilt ? 'Built' : p.templeOrdered ? 'Building...' : `${BUILDING_COSTS.temple} M`}
+            </button>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
+            <div><strong>Fire Warrior Hut</strong><br/><small>Trains ranged fireball casters</small></div>
+            <button class="btn ${p.fireWarriorHutBuilt ? 'active' : ''}" ${p.fireWarriorHutOrdered || p.fireWarriorHutBuilt || !p.templeBuilt || this.state.mana < BUILDING_COSTS.firewarrior_hut ? 'disabled' : ''} data-order="firewarrior_hut">
+              ${p.fireWarriorHutBuilt ? 'Built' : p.fireWarriorHutOrdered ? 'Building...' : `${BUILDING_COSTS.firewarrior_hut} M`}
+            </button>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
+            <div><strong>Guard Tower (${p.towersBuilt}/4)</strong><br/><small>Garrisons Fire Warriors for long range</small></div>
+            <button class="btn" ${p.towersOrdered >= 4 || p.hutsBuilt < 1 || this.state.mana < towerCost ? 'disabled' : ''} data-order="guard_tower">
+              ${p.towersBuilt >= 4 ? 'Maxed' : p.towersOrdered > p.towersBuilt ? 'Building...' : `${towerCost} M`}
+            </button>
+          </div>
+        </div>
         ${
           cfg.allianceTribe && cfg.allianceCost
             ? `<div class="scroll-card">
@@ -752,13 +762,16 @@ export class HudController {
       });
     });
 
-    this.elDrawer.querySelector('[data-action="build-tower"]')?.addEventListener('click', () => {
-      if (buildGuardTower(this.state, this.state.activePlanetId)) {
-        saveGame(this.state);
-        this.showToast('Guard Tower constructed!');
-        this.renderDrawer();
-        this.sync();
-      }
+    this.elDrawer.querySelectorAll<HTMLButtonElement>('[data-order]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const kind = btn.dataset.order as 'warrior_hut' | 'temple' | 'firewarrior_hut' | 'guard_tower';
+        if (orderBuilding(this.state, this.state.activePlanetId, kind)) {
+          saveGame(this.state);
+          this.showToast('Blueprint ordered — Braves will construct it!');
+          this.renderDrawer();
+          this.sync();
+        }
+      });
     });
 
     this.elDrawer.querySelector('[data-action="alliance"]')?.addEventListener('click', () => {
@@ -768,17 +781,6 @@ export class HudController {
         this.renderDrawer();
         this.sync();
       }
-    });
-
-    this.elDrawer.querySelectorAll<HTMLInputElement>('[data-ratio]').forEach((inp) => {
-      inp.addEventListener('input', () => {
-        const key = inp.dataset.ratio as keyof GameState['ratios'];
-        this.state.ratios[key] = Number(inp.value);
-        rebalanceUnits(this.state, this.state.planets[this.state.activePlanetId]);
-        const valEl = this.elDrawer.querySelector(`[data-rval="${key}"]`);
-        if (valEl) valEl.textContent = `${inp.value}%`;
-        saveGame(this.state);
-      });
     });
   }
 }

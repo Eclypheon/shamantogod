@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyOfflineProgress,
-  buildGuardTower,
   buyMetaUpgrade,
   castSpell,
   computeDominance,
@@ -9,8 +8,9 @@ import {
   formAlliance,
   getCastRangePx,
   hydrateState,
-  onHutConstructed,
+  onBuildingConstructed,
   onWildmanConverted,
+  orderBuilding,
   prestigeToPlanet,
   stepSimulation,
   switchPlanet,
@@ -24,7 +24,7 @@ describe('Shaman to God simulation', () => {
     expect(state.planets[1].hutsBuilt).toBe(0);
 
     onWildmanConverted(state);
-    onHutConstructed(state);
+    onBuildingConstructed(state, 'hut');
     expect(state.divineEssence).toBe(0);
     expect(state.pendingDivineEssence).toBeGreaterThan(0);
 
@@ -32,6 +32,21 @@ describe('Shaman to God simulation', () => {
     const res = prestigeToPlanet(state, 2);
     expect(res.ok).toBe(true);
     expect(state.divineEssence).toBe(res.bankedEssence);
+  });
+
+  it('orders Warrior Hut with Mana and automatically trains ~10% Warriors once Braves build it', () => {
+    const state = createInitialState();
+    state.mana = 500;
+    onBuildingConstructed(state, 'hut');
+    for (let i = 0; i < 10; i++) onWildmanConverted(state);
+
+    expect(orderBuilding(state, 1, 'warrior_hut')).toBe(true);
+    expect(state.planets[1].warriorHutOrdered).toBe(true);
+    expect(state.planets[1].warriors).toBe(0);
+
+    onBuildingConstructed(state, 'warrior_hut');
+    expect(state.planets[1].warriorHutBuilt).toBe(true);
+    expect(state.planets[1].warriors).toBe(1); // 10% of 10
   });
 
   it('computes 50/50 Dominance % from loyal pop share and enemy huts destroyed', () => {
@@ -59,7 +74,6 @@ describe('Shaman to God simulation', () => {
   it('enforces branched parent prerequisites on Pantheon nodes', () => {
     const state = createInitialState();
     state.divineEssence = 100;
-    // manaRate requires startingMana first
     expect(buyMetaUpgrade(state, 'manaRate')).toBe(false);
     expect(buyMetaUpgrade(state, 'startingMana')).toBe(true);
     expect(buyMetaUpgrade(state, 'manaRate')).toBe(true);
@@ -94,17 +108,9 @@ describe('Shaman to God simulation', () => {
     expect(computeDominance(state.planets[5])).toBeGreaterThan(before);
   });
 
-  it('constructs Guard Towers up to 4 per planet', () => {
-    const state = createInitialState();
-    state.mana = 500;
-    expect(buildGuardTower(state, 1)).toBe(true);
-    expect(state.planets[1].towersBuilt).toBe(1);
-    expect(state.mana).toBe(350);
-  });
-
   it('safely hydrates partial or older saved states without missing planets', () => {
     const hydrated = hydrateState({
-      version: 2,
+      version: 3,
       mana: 321,
       planets: { 1: { planetId: 1, unlocked: true, hutsBuilt: 3 } },
     });

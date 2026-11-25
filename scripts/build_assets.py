@@ -123,11 +123,15 @@ def build_unit_atlas(zf: zipfile.ZipFile):
             for d in range(1, 9):
                 add_clip(f"Red Shaman/{file_stem}{d}.gif", f"shaman_{tribe}_{anim}_d{d}", tribe)
 
-    # 4-dir subset (dirs 1, 3, 5, 7) for Brave, Warrior, Spy across 4 tribes
+    # 8-dir Braves for player (blue) + 4-dir for rival tribes: BraRun, BraWork, BraPunch, BraPray
     for tribe in TRIBE_TARGETS:
-        for d in [1, 3, 5, 7]:
-            add_clip(f"RedBrave/BraWalk{d}.gif", f"brave_{tribe}_walk_d{d}", tribe)
+        dirs = range(1, 9) if tribe == "blue" else [1, 3, 5, 7]
+        for d in dirs:
+            add_clip(f"RedBrave/BraRun{d}.gif", f"brave_{tribe}_run_d{d}", tribe)
             add_clip(f"RedBrave/BraWork{d}.gif", f"brave_{tribe}_work_d{d}", tribe)
+            add_clip(f"RedBrave/BraPunch{d}.gif", f"brave_{tribe}_punch_d{d}", tribe)
+            add_clip(f"RedBrave/BraPray{d}.gif", f"brave_{tribe}_pray_d{d}", tribe)
+        for d in [1, 3, 5, 7]:
             add_clip(f"RedWarrior/warrun{d}.gif", f"warrior_{tribe}_run_d{d}", tribe)
             add_clip(f"RedWarrior/warpunch{d}.gif", f"warrior_{tribe}_punch_d{d}", tribe)
             add_clip(f"BlueSpy/SpyRun{d}.gif", f"spy_{tribe}_run_d{d}", tribe, source_blue=True)

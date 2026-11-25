@@ -1,21 +1,33 @@
 import Phaser from 'phaser';
 import { SPELLS } from './data';
 import {
-  applyBlastImpact,
+  applyCombatResult,
   castSpell,
   getCastRangePx,
   getPlanetConfig,
+  getPopCap,
   getSpellPowerMult,
   getTimberSpeedMult,
-  onHutConstructed,
+  onBraveBred,
+  onBuildingConstructed,
+  onEnemyConvertedByPreacher,
   onWildmanConverted,
+  type BuildingBlueprintKind,
   type GameState,
 } from './state';
 
 const WORLD_W = 1600;
 const WORLD_H = 1000;
 
-type BraveTask = 'idle' | 'seek_tree' | 'chop_tree' | 'carry_wood' | 'build_hut';
+type BraveState =
+  | 'patrol'
+  | 'seek_tree'
+  | 'chop_tree'
+  | 'carry_wood'
+  | 'build_site'
+  | 'enter_hut'
+  | 'breeding'
+  | 'fight_enemy';
 
 interface TreeNode {
   x: number;
@@ -25,7 +37,8 @@ interface TreeNode {
   regrowTimer: number;
 }
 
-interface HutBlueprint {
+interface BuildSite {
+  kind: BuildingBlueprintKind;
   x: number;
   y: number;
   sprite: Phaser.GameObjects.Sprite;
@@ -33,6 +46,16 @@ interface HutBlueprint {
   barFill: Phaser.GameObjects.Rectangle;
   woodDelivered: number;
   woodNeeded: number;
+}
+
+interface PlayerHutNode {
+  x: number;
+  y: number;
+  sprite: Phaser.GameObjects.Sprite;
+  occupants: number;
+  breedTimer: number;
+  barBg: Phaser.GameObjects.Rectangle;
+  barFill: Phaser.GameObjects.Rectangle;
 }
 
 interface WildmanActor {
@@ -44,38 +67,67 @@ interface WildmanActor {
   targetX: number;
   targetY: number;
   waitTimer: number;
-  convertProgress: number; // 0..2.0 seconds
+  convertProgress: number;
 }
 
 interface BraveActor {
   sprite: Phaser.GameObjects.Sprite;
   x: number;
   y: number;
-  dir: number; // 1, 3, 5, 7
-  task: BraveTask;
+  hp: number;
+  dir: number; // 1..8
+  fsm: BraveState;
   targetTree: TreeNode | null;
-  workTimer: number;
+  targetHut: PlayerHutNode | null;
+  targetEnemy: EnemyActor | null;
+  timer: number;
   carryingWood: boolean;
-  idleX: number;
-  idleY: number;
+  patrolX: number;
+  patrolY: number;
+}
+
+interface SpecialistActor {
+  kind: 'warrior' | 'preacher' | 'firewarrior';
+  sprite: Phaser.GameObjects.Sprite;
+  x: number;
+  y: number;
+  hp: number;
+  dir: number;
+  attackTimer: number;
+  convertProgress: number;
+  garrisonedTowerIdx: number; // >=0 for Fire Warrior in a Guard Tower
+  patrolX: number;
+  patrolY: number;
 }
 
 interface EnemyActor {
   sprite: Phaser.GameObjects.Sprite;
   shadow: Phaser.GameObjects.Ellipse;
+  hpBg: Phaser.GameObjects.Rectangle;
+  hpFill: Phaser.GameObjects.Rectangle;
   tribe: 'red' | 'green' | 'yellow';
   x: number;
   y: number;
+  hp: number;
+  maxHp: number;
   targetX: number;
   targetY: number;
   waitTimer: number;
+  attackTimer: number;
   dir: number;
-  // Knockback physics
   airZ: number;
   vz: number;
   knockVx: number;
   knockVy: number;
   dead: boolean;
+}
+
+interface EnemyHutNode {
+  sprite: Phaser.GameObjects.Sprite;
+  x: number;
+  y: number;
+  hp: number;
+  tribe: 'red' | 'green' | 'yellow';
 }
 
 interface RivalShamanActor {
@@ -89,7 +141,6 @@ interface RivalShamanActor {
   targetY: number;
   waitTimer: number;
   dir: number;
-  castTimer: number;
 }
 
 interface ConvertCircle {
@@ -102,16 +153,16 @@ interface ConvertCircle {
   phase: number;
 }
 
+/** Exact Populous sprite directions: 1=S, 2=SE, 3=E, 4=NE, 5=N, 6=NW, 7=W, 8=SW */
 function dir8FromVec(dx: number, dy: number): number {
-  const angle = Math.atan2(dy, dx);
-  return ((((Math.round((angle / (Math.PI * 2)) * 8) + 2) % 8) + 8) % 8) + 1;
+  const oct = Math.round(Math.atan2(dy, dx) / (Math.PI / 4));
+  const map = [3, 2, 1, 8, 7, 6, 5, 4];
+  return map[((oct % 8) + 8) % 8];
 }
 
 function dir4FromVec(dx: number, dy: number): number {
-  if (Math.abs(dx) > Math.abs(dy)) {
-    return dx > 0 ? 3 : 7;
-  }
-  return dy > 0 ? 5 : 1;
+  if (Math.abs(dx) > Math.abs(dy)) return dx > 0 ? 3 : 7;
+  return dy > 0 ? 1 : 5;
 }
 
 export class PlanetScene extends Phaser.Scene {
@@ -128,21 +179,23 @@ export class PlanetScene extends Phaser.Scene {
 
   private terrainGfx!: Phaser.GameObjects.Graphics;
   private trees: TreeNode[] = [];
-  private playerHuts: Phaser.GameObjects.Sprite[] = [];
-  private enemyHuts: { sprite: Phaser.GameObjects.Sprite; x: number; y: number }[] = [];
-  private extraBuildings: Phaser.GameObjects.Sprite[] = [];
-  private blueprint: HutBlueprint | null = null;
+  private playerHuts: PlayerHutNode[] = [];
+  private towers: { x: number; y: number; sprite: Phaser.GameObjects.Sprite }[] = [];
+  private trainingBuildings: Phaser.GameObjects.Sprite[] = [];
+  private enemyHuts: EnemyHutNode[] = [];
+  private buildSite: BuildSite | null = null;
   private wildmen: WildmanActor[] = [];
   private braves: BraveActor[] = [];
+  private specialists: SpecialistActor[] = [];
   private enemies: EnemyActor[] = [];
   private rivalShamans: RivalShamanActor[] = [];
   private convertCircles: ConvertCircle[] = [];
 
-  private shamanDir = 5;
+  private shamanDir = 1; // Facing south toward camera
   private castAnimTimer = 0;
   private currentPlanetRendered = -1;
   private renderedAllied = false;
-  private renderedTowers = -1;
+  private enemyRaidTimer = 8;
   private simAccum = 0;
 
   constructor(state: GameState, onHudSync: () => void, onToast: (msg: string) => void) {
@@ -157,7 +210,6 @@ export class PlanetScene extends Phaser.Scene {
     this.currentPlanetRendered = -1;
   }
 
-  /** Triggered when player clicks Begin Conquest on Planet 1 with 0 followers. */
   triggerOpeningConvert(): void {
     if (!this.shaman) return;
     const p = this.state.planets[this.state.activePlanetId];
@@ -167,7 +219,7 @@ export class PlanetScene extends Phaser.Scene {
       this.castAnimTimer = 0.8;
       const castKey = `shaman_blue_cast_d${this.shamanDir}`;
       if (this.anims.exists(castKey)) this.shaman.play(castKey);
-      this.playSfx('convert', 0.38);
+      this.playSfx('convert', 0.36);
     }
   }
 
@@ -176,7 +228,7 @@ export class PlanetScene extends Phaser.Scene {
     this.joystickVec.y = y;
   }
 
-  private playSfx(key: string, volume = 0.35): void {
+  private playSfx(key: string, volume = 0.34): void {
     if (!this.state.muted && this.cache.audio.exists(key)) {
       this.sound.play(key, { volume });
     }
@@ -198,9 +250,9 @@ export class PlanetScene extends Phaser.Scene {
     this.registerAnimations();
     this.terrainGfx = this.add.graphics();
 
-    this.shaman = this.add.sprite(WORLD_W / 2, WORLD_H / 2, 'units', 'shaman_blue_stand_d5_00');
+    this.shaman = this.add.sprite(WORLD_W / 2, WORLD_H / 2, 'units', 'shaman_blue_stand_d1_00');
     this.shaman.setOrigin(0.5, 1.0).setScale(1.4).setDepth(500);
-    this.shaman.play('shaman_blue_stand_d5');
+    this.shaman.play('shaman_blue_stand_d1');
     this.shamanLabel = this.add.text(this.shaman.x, this.shaman.y - 62, 'SHAMAN', {
       fontFamily: 'Cinzel, Georgia, serif',
       fontSize: '10px',
@@ -262,17 +314,23 @@ export class PlanetScene extends Phaser.Scene {
   private clearPlanetObjects(): void {
     for (const t of this.trees) t.sprite.destroy();
     this.trees = [];
-    for (const s of this.playerHuts) s.destroy();
+    for (const h of this.playerHuts) {
+      h.sprite.destroy();
+      h.barBg.destroy();
+      h.barFill.destroy();
+    }
     this.playerHuts = [];
+    for (const tw of this.towers) tw.sprite.destroy();
+    this.towers = [];
+    for (const tb of this.trainingBuildings) tb.destroy();
+    this.trainingBuildings = [];
     for (const eh of this.enemyHuts) eh.sprite.destroy();
     this.enemyHuts = [];
-    for (const s of this.extraBuildings) s.destroy();
-    this.extraBuildings = [];
-    if (this.blueprint) {
-      this.blueprint.sprite.destroy();
-      this.blueprint.barBg.destroy();
-      this.blueprint.barFill.destroy();
-      this.blueprint = null;
+    if (this.buildSite) {
+      this.buildSite.sprite.destroy();
+      this.buildSite.barBg.destroy();
+      this.buildSite.barFill.destroy();
+      this.buildSite = null;
     }
     for (const w of this.wildmen) {
       w.sprite.destroy();
@@ -282,9 +340,13 @@ export class PlanetScene extends Phaser.Scene {
     this.wildmen = [];
     for (const b of this.braves) b.sprite.destroy();
     this.braves = [];
+    for (const s of this.specialists) s.sprite.destroy();
+    this.specialists = [];
     for (const e of this.enemies) {
       e.sprite.destroy();
       e.shadow.destroy();
+      e.hpBg.destroy();
+      e.hpFill.destroy();
     }
     this.enemies = [];
     for (const rs of this.rivalShamans) {
@@ -305,23 +367,19 @@ export class PlanetScene extends Phaser.Scene {
     const p = this.state.planets[cfg.id];
     this.currentPlanetRendered = cfg.id;
     this.renderedAllied = p.allied;
-    this.renderedTowers = Math.min(4, p.towersBuilt);
 
     this.clearPlanetObjects();
     this.shaman.setPosition(WORLD_W / 2, WORLD_H / 2);
 
-    // Draw warm Populous-style island terrain
+    // Terrain
     this.terrainGfx.clear();
     this.terrainGfx.fillStyle(cfg.waterColor, 1);
     this.terrainGfx.fillRect(0, 0, WORLD_W, WORLD_H);
-
-    // Sandy coastline ring + main grass/earth island
     this.terrainGfx.fillStyle(0x9c8257, 1);
     this.terrainGfx.fillEllipse(WORLD_W / 2, WORLD_H / 2, WORLD_W * 0.85, WORLD_H * 0.82);
     this.terrainGfx.fillStyle(cfg.groundColor, 1);
     this.terrainGfx.fillEllipse(WORLD_W / 2, WORLD_H / 2, WORLD_W * 0.81, WORLD_H * 0.77);
 
-    // Subtle isometric grid lines
     this.terrainGfx.lineStyle(1, 0x000000, 0.08);
     for (let gx = 200; gx < WORLD_W - 200; gx += 96) {
       for (let gy = 160; gy < WORLD_H - 160; gy += 64) {
@@ -337,11 +395,10 @@ export class PlanetScene extends Phaser.Scene {
       }
     }
 
-    // Plant Populous tree groves around the center and outer edges
+    // Only 7 sparse Populous trees (regrow slowly in 75s)
     const treeOffsets = [
-      [-170, -90], [-140, -125], [-195, -55], [-160, 80], [-195, 110], [-125, 115],
-      [155, -100], [185, -70], [160, 95], [195, 65], [-70, -140], [65, -145],
-      [-60, 145], [75, 140], [-280, 10], [-260, -140], [260, -150], [240, 155],
+      [-185, -95], [-160, 105], [175, -105], [190, 95],
+      [-40, -155], [45, 155], [-265, 10],
     ];
     for (const [ox, oy] of treeOffsets) {
       const tx = WORLD_W / 2 + ox;
@@ -350,19 +407,9 @@ export class PlanetScene extends Phaser.Scene {
       this.trees.push({ x: tx, y: ty, sprite: sp, chopped: false, regrowTimer: 0 });
     }
 
-    // Existing player huts (0 at start of Planet 1!)
-    this.syncPlayerHutSprites();
+    this.syncBuiltStructures();
 
-    // Guard towers if built
-    for (let i = 0; i < this.renderedTowers; i++) {
-      const tx = WORLD_W / 2 + 125 + (i % 2) * 58;
-      const ty = WORLD_H / 2 - 55 + Math.floor(i / 2) * 110;
-      this.extraBuildings.push(
-        this.add.sprite(tx, ty, 'world', 'guard_tower_blue').setOrigin(0.5, 0.92).setDepth(ty)
-      );
-    }
-
-    // Rival huts positioned on the far eastern/outer territory so center starts calm and clean
+    // Rival huts
     const enemyHutCount = Math.min(10, p.enemyHutsRemaining);
     for (let i = 0; i < enemyHutCount; i++) {
       const tribe = cfg.rivals[i % cfg.rivals.length];
@@ -370,10 +417,10 @@ export class PlanetScene extends Phaser.Scene {
       const bx = WORLD_W / 2 + Math.cos(angle) * 440;
       const by = WORLD_H / 2 + Math.sin(angle) * 240;
       const sp = this.add.sprite(bx, by, 'world', `hut_2_${tribe}`).setOrigin(0.5, 0.92).setDepth(by);
-      this.enemyHuts.push({ sprite: sp, x: bx, y: by });
+      this.enemyHuts.push({ sprite: sp, x: bx, y: by, hp: 40, tribe });
     }
 
-    // 1 Rival Shaman per rival tribe (becomes Ally Shaman when allied on Planet 5+)
+    // 1 Rival Shaman per rival tribe (becomes Ally when allied on Planet 5+)
     cfg.rivals.forEach((tribe, idx) => {
       const isAlly = p.allied && cfg.allianceTribe === tribe;
       const angle = idx === 0 ? 0 : idx === 1 ? Math.PI : Math.PI / 2;
@@ -381,8 +428,8 @@ export class PlanetScene extends Phaser.Scene {
       const sy = WORLD_H / 2 + Math.sin(angle) * 210;
       const ringColor = isAlly ? 0x52b788 : tribe === 'red' ? 0xe63946 : tribe === 'green' ? 0x2ec4b6 : 0xf4c95d;
       const ring = this.add.circle(sx, sy, 26, ringColor, 0.14).setStrokeStyle(2, ringColor, 0.85).setDepth(4);
-      const sp = this.add.sprite(sx, sy, 'units', `shaman_${tribe}_stand_d5_00`).setOrigin(0.5, 1).setScale(1.32).setDepth(sy);
-      if (this.anims.exists(`shaman_${tribe}_stand_d5`)) sp.play(`shaman_${tribe}_stand_d5`);
+      const sp = this.add.sprite(sx, sy, 'units', `shaman_${tribe}_stand_d1_00`).setOrigin(0.5, 1).setScale(1.32).setDepth(sy);
+      if (this.anims.exists(`shaman_${tribe}_stand_d1`)) sp.play(`shaman_${tribe}_stand_d1`);
       const label = this.add.text(sx, sy - 60, isAlly ? `ALLY (${tribe.toUpperCase()})` : `RIVAL (${tribe.toUpperCase()})`, {
         fontFamily: 'Cinzel, Georgia, serif',
         fontSize: '9px',
@@ -401,75 +448,153 @@ export class PlanetScene extends Phaser.Scene {
         targetX: sx,
         targetY: sy,
         waitTimer: 1.5,
-        dir: 5,
-        castTimer: Phaser.Math.FloatBetween(4, 9),
+        dir: 1,
       });
     });
 
-    // Spawn 6 Wildmen right near the Shaman in the center!
+    // 6 Wildmen near the Shaman at center
     for (let i = 0; i < 6; i++) {
       const ang = (i / 6) * Math.PI * 2 + 0.3;
       const dist = Phaser.Math.Between(48, 86);
       this.spawnWildman(WORLD_W / 2 + Math.cos(ang) * dist, WORLD_H / 2 + Math.sin(ang) * dist);
     }
 
-    // Spawn existing loyal Braves
-    const braveCount = Math.min(10, p.loyalPop);
-    for (let i = 0; i < braveCount; i++) {
-      this.spawnBrave(WORLD_W / 2 + Phaser.Math.Between(-80, 80), WORLD_H / 2 + Phaser.Math.Between(-50, 50));
-    }
+    // Existing loyal units
+    this.syncUnitActors();
 
-    // Spawn enemy guards around rival territories
+    // Enemy warriors around rival territories
     cfg.rivals.forEach((tribe, idx) => {
       const angle = idx === 0 ? 0 : idx === 1 ? Math.PI : Math.PI / 2;
-      const cx = WORLD_W / 2 + Math.cos(angle) * 390;
-      const cy = WORLD_H / 2 + Math.sin(angle) * 200;
+      const cx = WORLD_W / 2 + Math.cos(angle) * 370;
+      const cy = WORLD_H / 2 + Math.sin(angle) * 195;
       for (let i = 0; i < 4; i++) {
-        this.spawnEnemy(tribe, cx + Phaser.Math.Between(-70, 70), cy + Phaser.Math.Between(-55, 55));
+        this.spawnEnemy(tribe, cx + Phaser.Math.Between(-65, 65), cy + Phaser.Math.Between(-50, 50));
       }
     });
   }
 
-  private syncPlayerHutSprites(): void {
-    const p = this.state.planets[this.state.activePlanetId];
-    const targetCount = Math.min(8, p.hutsBuilt);
-    while (this.playerHuts.length < targetCount) {
-      const idx = this.playerHuts.length;
-      const pos = this.getHutSlotPos(idx);
-      const lv = Math.min(3, 1 + Math.floor(idx / 3));
-      const sp = this.add.sprite(pos.x, pos.y, 'world', `hut_${lv}_blue`).setOrigin(0.5, 0.92).setDepth(pos.y);
-      this.playerHuts.push(sp);
-    }
-    // Unlock visual Temple / Warrior Hut organically as village grows
-    if (p.hutsBuilt >= 2 && this.extraBuildings.length === 0) {
-      this.extraBuildings.push(
-        this.add.sprite(WORLD_W / 2 - 125, WORLD_H / 2 - 45, 'world', 'warrior_hut_blue').setOrigin(0.5, 0.92).setDepth(WORLD_H / 2 - 45)
-      );
-    }
-    if (p.hutsBuilt >= 3 && this.extraBuildings.length === 1) {
-      this.extraBuildings.push(
-        this.add.sprite(WORLD_W / 2 - 125, WORLD_H / 2 + 55, 'world', 'temple_blue').setOrigin(0.5, 0.92).setDepth(WORLD_H / 2 + 55)
-      );
-    }
-  }
-
   private getHutSlotPos(idx: number): { x: number; y: number } {
     const slots = [
-      [-78, -28], [78, -28], [-78, 56], [78, 56],
-      [-155, 14], [155, 14], [0, -88], [0, 96],
+      [-82, -26], [82, -26], [-82, 58], [82, 58],
+      [-155, 16], [155, 16], [0, -92], [0, 98],
     ];
     const [ox, oy] = slots[idx % slots.length];
     return { x: WORLD_W / 2 + ox, y: WORLD_H / 2 + oy };
   }
 
-  private ensureBlueprint(): void {
+  private syncBuiltStructures(): void {
     const p = this.state.planets[this.state.activePlanetId];
-    if (!this.state.autoBuild || this.blueprint || this.braves.length === 0 || p.hutsBuilt >= 8) return;
-    const slot = this.getHutSlotPos(p.hutsBuilt);
-    const sp = this.add.sprite(slot.x, slot.y, 'world', 'hut_plan_blue').setOrigin(0.5, 0.92).setDepth(slot.y - 1);
-    const barBg = this.add.rectangle(slot.x, slot.y - 44, 38, 5, 0x1a120a, 0.85).setDepth(920);
-    const barFill = this.add.rectangle(slot.x - 18, slot.y - 44, 0, 3, 0xe9c46a, 1).setOrigin(0, 0.5).setDepth(921);
-    this.blueprint = { x: slot.x, y: slot.y, sprite: sp, barBg, barFill, woodDelivered: 0, woodNeeded: 3 };
+    const targetHuts = Math.min(8, p.hutsBuilt);
+    while (this.playerHuts.length < targetHuts) {
+      const idx = this.playerHuts.length;
+      const pos = this.getHutSlotPos(idx);
+      const lv = Math.min(3, 1 + Math.floor(idx / 3));
+      const sp = this.add.sprite(pos.x, pos.y, 'world', `hut_${lv}_blue`).setOrigin(0.5, 0.92).setDepth(pos.y);
+      const barBg = this.add.rectangle(pos.x, pos.y - 52, 30, 4, 0x1a120a, 0.85).setVisible(false).setDepth(920);
+      const barFill = this.add.rectangle(pos.x - 14, pos.y - 52, 0, 2, 0xf4c95d, 1).setOrigin(0, 0.5).setVisible(false).setDepth(921);
+      this.playerHuts.push({ x: pos.x, y: pos.y, sprite: sp, occupants: 0, breedTimer: 0, barBg, barFill });
+    }
+
+    // Re-sync training buildings & guard towers
+    for (const s of this.trainingBuildings) s.destroy();
+    this.trainingBuildings = [];
+    if (p.warriorHutBuilt) {
+      this.trainingBuildings.push(
+        this.add.sprite(WORLD_W / 2 - 135, WORLD_H / 2 - 58, 'world', 'warrior_hut_blue').setOrigin(0.5, 0.92).setDepth(WORLD_H / 2 - 58)
+      );
+    }
+    if (p.templeBuilt) {
+      this.trainingBuildings.push(
+        this.add.sprite(WORLD_W / 2 - 135, WORLD_H / 2 + 68, 'world', 'temple_blue').setOrigin(0.5, 0.92).setDepth(WORLD_H / 2 + 68)
+      );
+    }
+    if (p.fireWarriorHutBuilt) {
+      this.trainingBuildings.push(
+        this.add.sprite(WORLD_W / 2 + 135, WORLD_H / 2 - 58, 'world', 'firewarrior_hut_blue').setOrigin(0.5, 0.92).setDepth(WORLD_H / 2 - 58)
+      );
+    }
+
+    while (this.towers.length < Math.min(4, p.towersBuilt)) {
+      const idx = this.towers.length;
+      const tx = WORLD_W / 2 + 140 + (idx % 2) * 56;
+      const ty = WORLD_H / 2 + 35 + Math.floor(idx / 2) * 68;
+      const sp = this.add.sprite(tx, ty, 'world', 'guard_tower_blue').setOrigin(0.5, 0.92).setDepth(ty);
+      this.towers.push({ x: tx, y: ty, sprite: sp });
+    }
+  }
+
+  private syncUnitActors(): void {
+    const p = this.state.planets[this.state.activePlanetId];
+    const wantBraves = Math.min(10, p.braves);
+    while (this.braves.length < wantBraves) {
+      this.spawnBrave(WORLD_W / 2 + Phaser.Math.Between(-60, 60), WORLD_H / 2 + Phaser.Math.Between(-45, 45));
+    }
+    while (this.braves.length > wantBraves && this.braves.length > 0) {
+      const rem = this.braves.pop()!;
+      if (rem.targetHut && rem.fsm === 'breeding') rem.targetHut.occupants = Math.max(0, rem.targetHut.occupants - 1);
+      rem.sprite.destroy();
+    }
+
+    const syncSpec = (kind: SpecialistActor['kind'], want: number) => {
+      const existing = this.specialists.filter((s) => s.kind === kind);
+      let diff = Math.min(6, want) - existing.length;
+      while (diff > 0) {
+        this.spawnSpecialist(kind);
+        diff--;
+      }
+      while (diff < 0) {
+        const idx = this.specialists.findIndex((s) => s.kind === kind);
+        if (idx >= 0) {
+          this.specialists[idx].sprite.destroy();
+          this.specialists.splice(idx, 1);
+        }
+        diff++;
+      }
+    };
+    syncSpec('warrior', p.warriors);
+    syncSpec('preacher', p.preachers);
+    syncSpec('firewarrior', p.fireWarriors);
+  }
+
+  private ensureBuildSite(): void {
+    if (this.buildSite || this.braves.length === 0) return;
+    const p = this.state.planets[this.state.activePlanetId];
+
+    // Priority: ordered Training Buildings / Guard Towers first, then Huts
+    let kind: BuildingBlueprintKind | null = null;
+    let pos = { x: WORLD_W / 2, y: WORLD_H / 2 };
+    if (p.warriorHutOrdered && !p.warriorHutBuilt) {
+      kind = 'warrior_hut';
+      pos = { x: WORLD_W / 2 - 135, y: WORLD_H / 2 - 58 };
+    } else if (p.templeOrdered && !p.templeBuilt) {
+      kind = 'temple';
+      pos = { x: WORLD_W / 2 - 135, y: WORLD_H / 2 + 68 };
+    } else if (p.fireWarriorHutOrdered && !p.fireWarriorHutBuilt) {
+      kind = 'firewarrior_hut';
+      pos = { x: WORLD_W / 2 + 135, y: WORLD_H / 2 - 58 };
+    } else if (p.towersOrdered > p.towersBuilt && p.towersBuilt < 4) {
+      kind = 'guard_tower';
+      const idx = p.towersBuilt;
+      pos = { x: WORLD_W / 2 + 140 + (idx % 2) * 56, y: WORLD_H / 2 + 35 + Math.floor(idx / 2) * 68 };
+    } else if (p.hutsBuilt < 8) {
+      kind = 'hut';
+      pos = this.getHutSlotPos(p.hutsBuilt);
+    }
+
+    if (!kind) return;
+    const sp = this.add.sprite(pos.x, pos.y, 'world', 'hut_plan_blue').setOrigin(0.5, 0.92).setDepth(pos.y - 1);
+    const barBg = this.add.rectangle(pos.x, pos.y - 44, 38, 5, 0x1a120a, 0.85).setDepth(920);
+    const barFill = this.add.rectangle(pos.x - 18, pos.y - 44, 0, 3, 0xe9c46a, 1).setOrigin(0, 0.5).setDepth(921);
+    this.buildSite = {
+      kind,
+      x: pos.x,
+      y: pos.y,
+      sprite: sp,
+      barBg,
+      barFill,
+      woodDelivered: 0,
+      woodNeeded: kind === 'hut' ? 3 : 4,
+    };
   }
 
   private spawnWildman(x: number, y: number): void {
@@ -491,42 +616,102 @@ export class PlanetScene extends Phaser.Scene {
   }
 
   private spawnBrave(x: number, y: number): void {
-    const sp = this.add.sprite(x, y, 'units', 'brave_blue_walk_d5_00').setOrigin(0.5, 1).setScale(1.0).setDepth(y);
-    if (this.anims.exists('brave_blue_walk_d5')) sp.play('brave_blue_walk_d5');
+    const sp = this.add.sprite(x, y, 'units', 'brave_blue_run_d1_00').setOrigin(0.5, 1).setScale(1.0).setDepth(y);
+    if (this.anims.exists('brave_blue_pray_d1')) sp.play('brave_blue_pray_d1');
     this.braves.push({
       sprite: sp,
       x,
       y,
-      dir: 5,
-      task: 'idle',
+      hp: 25,
+      dir: 1,
+      fsm: 'patrol',
       targetTree: null,
-      workTimer: 0,
+      targetHut: null,
+      targetEnemy: null,
+      timer: 0.4,
       carryingWood: false,
-      idleX: x,
-      idleY: y,
+      patrolX: x,
+      patrolY: y,
+    });
+  }
+
+  private spawnSpecialist(kind: SpecialistActor['kind']): void {
+    const x = WORLD_W / 2 + Phaser.Math.Between(-90, 90);
+    const y = WORLD_H / 2 + Phaser.Math.Between(-60, 60);
+    const initAnim =
+      kind === 'warrior'
+        ? 'warrior_blue_run_d1'
+        : kind === 'preacher'
+          ? 'preacher_blue_pray'
+          : 'firewarrior_blue_fire';
+    const sp = this.add.sprite(x, y, 'units').setOrigin(0.5, 1).setScale(1.05).setDepth(y);
+    if (this.anims.exists(initAnim)) sp.play(initAnim);
+
+    // Assign Fire Warriors to unoccupied Guard Towers if available
+    let towerIdx = -1;
+    if (kind === 'firewarrior' && this.towers.length > 0) {
+      const taken = new Set(this.specialists.filter((s) => s.garrisonedTowerIdx >= 0).map((s) => s.garrisonedTowerIdx));
+      for (let i = 0; i < this.towers.length; i++) {
+        if (!taken.has(i)) {
+          towerIdx = i;
+          break;
+        }
+      }
+    }
+
+    this.specialists.push({
+      kind,
+      sprite: sp,
+      x: towerIdx >= 0 ? this.towers[towerIdx].x : x,
+      y: towerIdx >= 0 ? this.towers[towerIdx].y - 26 : y,
+      hp: kind === 'warrior' ? 55 : 35,
+      dir: 1,
+      attackTimer: 0,
+      convertProgress: 0,
+      garrisonedTowerIdx: towerIdx,
+      patrolX: x,
+      patrolY: y,
     });
   }
 
   private spawnEnemy(tribe: 'red' | 'green' | 'yellow', x: number, y: number): void {
     const shadow = this.add.ellipse(x, y, 18, 8, 0x000000, 0.35).setDepth(y - 2);
-    const sp = this.add.sprite(x, y, 'units', `warrior_${tribe}_run_d5_00`).setOrigin(0.5, 1).setScale(1.0).setDepth(y);
-    if (this.anims.exists(`warrior_${tribe}_run_d5`)) sp.play(`warrior_${tribe}_run_d5`);
+    const sp = this.add.sprite(x, y, 'units', `warrior_${tribe}_run_d1_00`).setOrigin(0.5, 1).setScale(1.0).setDepth(y);
+    if (this.anims.exists(`warrior_${tribe}_run_d1`)) sp.play(`warrior_${tribe}_run_d1`);
+    const hpBg = this.add.rectangle(x, y - 42, 22, 3, 0x1a120a, 0.85).setVisible(false).setDepth(925);
+    const hpFill = this.add.rectangle(x - 10, y - 42, 20, 2, 0xe63946, 1).setOrigin(0, 0.5).setVisible(false).setDepth(926);
     this.enemies.push({
       sprite: sp,
       shadow,
+      hpBg,
+      hpFill,
       tribe,
       x,
       y,
+      hp: 30,
+      maxHp: 30,
       targetX: x,
       targetY: y,
-      waitTimer: Phaser.Math.FloatBetween(0.5, 2),
-      dir: 5,
+      waitTimer: Phaser.Math.FloatBetween(0.6, 2.0),
+      attackTimer: 0,
+      dir: 1,
       airZ: 0,
       vz: 0,
       knockVx: 0,
       knockVy: 0,
       dead: false,
     });
+  }
+
+  private killEnemy(e: EnemyActor): void {
+    if (e.dead) return;
+    e.dead = true;
+    e.sprite.destroy();
+    e.shadow.destroy();
+    e.hpBg.destroy();
+    e.hpFill.destroy();
+    applyCombatResult(this.state, 1, 0, 0);
+    this.onHudSync();
   }
 
   private spawnConvertCircle(x: number, y: number): void {
@@ -541,13 +726,10 @@ export class PlanetScene extends Phaser.Scene {
     this.convertCircles.push({ x, y, radius, remaining: 4.0, ring, sparkles, phase: 0 });
   }
 
-  private fireBlastProjectile(tx: number, ty: number): void {
-    const sx = this.shaman.x;
-    const sy = this.shaman.y - 26;
-    const bolt = this.add.sprite(sx, sy, 'world', 'vfx_blast').setScale(0.75).setDepth(920);
+  private fireProjectile(sx: number, sy: number, tx: number, ty: number, vfxKey: string, onHit: () => void): void {
+    const bolt = this.add.sprite(sx, sy, 'world', vfxKey).setScale(0.7).setDepth(920);
     const dist = Phaser.Math.Distance.Between(sx, sy, tx, ty);
-    const dur = Phaser.Math.Clamp(dist * 1.4, 140, 480);
-
+    const dur = Phaser.Math.Clamp(dist * 1.35, 130, 480);
     this.tweens.add({
       targets: bolt,
       x: tx,
@@ -557,7 +739,7 @@ export class PlanetScene extends Phaser.Scene {
       ease: 'Quad.easeOut',
       onComplete: () => {
         bolt.destroy();
-        this.detonateBlast(tx, ty);
+        onHit();
       },
     });
   }
@@ -565,24 +747,17 @@ export class PlanetScene extends Phaser.Scene {
   private detonateBlast(bx: number, by: number): void {
     const radius = 92 * (1 + this.state.metaLevels.tempestForce * 0.15);
     const shock = this.add.circle(bx, by, 14, 0xff9f1c, 0.35).setStrokeStyle(3, 0xfff3b0, 0.95).setDepth(910);
-    this.tweens.add({
-      targets: shock,
-      radius,
-      alpha: 0,
-      duration: 340,
-      onComplete: () => shock.destroy(),
-    });
+    this.tweens.add({ targets: shock, radius, alpha: 0, duration: 340, onComplete: () => shock.destroy() });
 
-    let unitHits = 0;
+    let launched = 0;
     for (const e of this.enemies) {
       if (e.dead) continue;
-      const d = Phaser.Math.Distance.Between(bx, by, e.x, e.y);
-      if (d <= radius) {
+      if (Phaser.Math.Distance.Between(bx, by, e.x, e.y) <= radius) {
         const ang = Math.atan2(e.y - by, e.x - bx);
-        e.vz = 230;
+        e.vz = 235;
         e.knockVx = Math.cos(ang) * 145;
         e.knockVy = Math.sin(ang) * 110;
-        unitHits += 1;
+        launched += 1;
       }
     }
 
@@ -590,18 +765,19 @@ export class PlanetScene extends Phaser.Scene {
     for (let i = this.enemyHuts.length - 1; i >= 0; i--) {
       const eh = this.enemyHuts[i];
       if (Phaser.Math.Distance.Between(bx, by, eh.x, eh.y) <= radius) {
-        eh.sprite.destroy();
-        this.enemyHuts.splice(i, 1);
-        hutHits += 1;
-        this.spawnFloatingText(eh.x, eh.y, '-1 Enemy Hut', '#ffb703');
+        eh.hp -= 25 * getSpellPowerMult(this.state);
+        if (eh.hp <= 0) {
+          eh.sprite.destroy();
+          this.enemyHuts.splice(i, 1);
+          hutHits += 1;
+          this.spawnFloatingText(eh.x, eh.y, '-1 Enemy Hut', '#ffb703');
+        }
       }
     }
 
-    if (unitHits > 0 || hutHits > 0) {
-      applyBlastImpact(this.state, unitHits, hutHits);
-      if (unitHits > 0) this.spawnFloatingText(bx, by, `Blast! ${unitHits} launched`, '#ff9f1c');
-      this.onHudSync();
-    }
+    if (hutHits > 0) applyCombatResult(this.state, 0, hutHits, 0);
+    if (launched > 0) this.spawnFloatingText(bx, by, `Blast! ${launched} launched`, '#ff9f1c');
+    this.onHudSync();
   }
 
   private spawnFloatingText(wx: number, wy: number, text: string, color = '#f4e6c4'): void {
@@ -637,31 +813,35 @@ export class PlanetScene extends Phaser.Scene {
       return;
     }
 
-    // Turn Shaman toward target and play cast animation
-    if (dist > 6) {
-      this.shamanDir = dir8FromVec(wx - this.shaman.x, wy - this.shaman.y);
-    }
+    if (dist > 6) this.shamanDir = dir8FromVec(wx - this.shaman.x, wy - this.shaman.y);
     this.castAnimTimer = 0.65;
     const castKey = `shaman_blue_cast_d${this.shamanDir}`;
     if (this.anims.exists(castKey)) this.shaman.play(castKey);
-    this.playSfx(spell.sound, 0.36);
+    this.playSfx(spell.sound, 0.35);
 
     if (spell.id === 'convert') {
       this.spawnConvertCircle(wx, wy);
     } else if (spell.id === 'blast') {
-      this.fireBlastProjectile(wx, wy);
+      this.fireProjectile(this.shaman.x, this.shaman.y - 26, wx, wy, 'vfx_blast', () => this.detonateBlast(wx, wy));
     } else if (spell.kind === 'teleport') {
       this.shaman.setPosition(Phaser.Math.Clamp(wx, 120, WORLD_W - 120), Phaser.Math.Clamp(wy, 120, WORLD_H - 120));
       this.spawnFloatingText(wx, wy, 'Teleport', '#90e0ef');
     } else {
       const vfx = this.add.sprite(wx, wy, 'world', spell.vfx).setScale(0.6).setDepth(900);
       this.tweens.add({ targets: vfx, scale: 2.2, alpha: 0, duration: 550, onComplete: () => vfx.destroy() });
-      if (res.converted && res.converted > 0) this.spawnFloatingText(wx, wy, `+${res.converted} Braves`, '#74c69d');
+      if (res.converted && res.converted > 0) this.spawnFloatingText(wx, wy, `+${res.converted} Followers`, '#74c69d');
       else if (res.destroyed && res.destroyed > 0) this.spawnFloatingText(wx, wy, `-${res.destroyed} Enemy Hut`, '#ffb703');
       else if (spell.kind === 'buff') this.spawnFloatingText(wx, wy, `${spell.name} Active`, '#90e0ef');
     }
 
     this.onHudSync();
+  }
+
+  private playBraveAnim(b: BraveActor, verb: 'run' | 'work' | 'punch' | 'pray'): void {
+    const key = `brave_blue_${verb}_d${b.dir}`;
+    if (this.anims.exists(key) && b.sprite.anims.currentAnim?.key !== key) {
+      b.sprite.play(key);
+    }
   }
 
   private updateConvertCircles(dt: number): void {
@@ -677,7 +857,6 @@ export class PlanetScene extends Phaser.Scene {
         sp.setPosition(cc.x + Math.cos(ang) * r, cc.y + Math.sin(ang) * r);
         sp.setAlpha(0.45 + 0.5 * Math.abs(Math.sin(cc.phase * 3 + idx)));
       });
-
       if (cc.remaining <= 0) {
         cc.ring.destroy();
         cc.sparkles.forEach((sp) => sp.destroy());
@@ -685,18 +864,11 @@ export class PlanetScene extends Phaser.Scene {
       }
     }
 
-    // Update Wildmen (wandering + 2.0s conversion inside active Convert circles)
     for (let i = this.wildmen.length - 1; i >= 0; i--) {
       const w = this.wildmen[i];
-      let insideCircle: ConvertCircle | null = null;
-      for (const cc of this.convertCircles) {
-        if (Phaser.Math.Distance.Between(w.x, w.y, cc.x, cc.y) <= cc.radius) {
-          insideCircle = cc;
-          break;
-        }
-      }
+      const inside = this.convertCircles.some((cc) => Phaser.Math.Distance.Between(w.x, w.y, cc.x, cc.y) <= cc.radius);
 
-      if (insideCircle) {
+      if (inside) {
         w.convertProgress += dt * convSpeed;
         w.barBg.setVisible(true).setPosition(w.x, w.y - 40);
         w.barFill.setVisible(true).setPosition(w.x - 13, w.y - 40).setSize(Math.min(26, (w.convertProgress / 2.0) * 26), 2);
@@ -711,7 +883,7 @@ export class PlanetScene extends Phaser.Scene {
             this.spawnBrave(w.x, w.y);
             this.playSfx('birth', 0.35);
             this.spawnFloatingText(w.x, w.y, '+1 Brave', '#74c69d');
-            this.ensureBlueprint();
+            this.ensureBuildSite();
             this.onHudSync();
           }
           continue;
@@ -726,16 +898,15 @@ export class PlanetScene extends Phaser.Scene {
           w.waitTimer -= dt;
           if (w.sprite.anims.currentAnim?.key !== 'wildman_eat') w.sprite.play('wildman_eat');
           if (w.waitTimer <= 0) {
-            w.targetX = WORLD_W / 2 + Phaser.Math.Between(-150, 150);
-            w.targetY = WORLD_H / 2 + Phaser.Math.Between(-110, 110);
-            w.waitTimer = Phaser.Math.FloatBetween(1.2, 3.0);
+            w.targetX = WORLD_W / 2 + Phaser.Math.Between(-145, 145);
+            w.targetY = WORLD_H / 2 + Phaser.Math.Between(-105, 105);
+            w.waitTimer = Phaser.Math.FloatBetween(1.4, 3.0);
           }
         } else {
-          const speed = 34;
           const dx = (w.targetX - w.x) / dist;
           const dy = (w.targetY - w.y) / dist;
-          w.x += dx * speed * dt;
-          w.y += dy * speed * dt;
+          w.x += dx * 32 * dt;
+          w.y += dy * 32 * dt;
           w.sprite.setFlipX(dx < 0);
           if (w.sprite.anims.currentAnim?.key !== 'wildman_run') w.sprite.play('wildman_run');
         }
@@ -743,16 +914,18 @@ export class PlanetScene extends Phaser.Scene {
       w.sprite.setPosition(w.x, w.y).setDepth(w.y);
     }
 
-    // Slowly replenish Wildmen if fewer than 4 remain
-    if (this.wildmen.length < 4 && Math.random() < 0.12 * dt) {
-      this.spawnWildman(WORLD_W / 2 + Phaser.Math.Between(-190, 190), WORLD_H / 2 + Phaser.Math.Between(-120, 120));
+    if (this.wildmen.length < 3 && Math.random() < 0.06 * dt) {
+      this.spawnWildman(WORLD_W / 2 + Phaser.Math.Between(-170, 170), WORLD_H / 2 + Phaser.Math.Between(-110, 110));
     }
   }
 
-  private updateBravesAndTrees(dt: number): void {
+  /** Proper Brave State Machine: seek_tree -> chop_tree -> carry_wood -> build_site | enter_hut -> breeding | fight_enemy | patrol */
+  private updateBravesAndHuts(dt: number): void {
     const timberMult = getTimberSpeedMult(this.state);
+    const p = this.state.planets[this.state.activePlanetId];
+    const popCap = getPopCap(this.state, p.planetId);
 
-    // Regrow chopped trees slowly
+    // Slow tree regrowth (75s)
     for (const t of this.trees) {
       if (t.chopped) {
         t.regrowTimer -= dt;
@@ -763,125 +936,229 @@ export class PlanetScene extends Phaser.Scene {
       }
     }
 
-    this.ensureBlueprint();
+    // Hut breeding timers (pair of Braves inside a Hut breeds a new Brave!)
+    for (const h of this.playerHuts) {
+      if (h.occupants >= 2 && p.loyalPop < popCap) {
+        h.breedTimer += dt;
+        h.barBg.setVisible(true);
+        h.barFill.setVisible(true).setSize(Math.min(28, (h.breedTimer / 6.5) * 28), 2);
+        if (h.breedTimer >= 6.5) {
+          h.breedTimer = 0;
+          h.barBg.setVisible(false);
+          h.barFill.setVisible(false);
+          if (onBraveBred(this.state)) {
+            this.spawnBrave(h.x, h.y + 18);
+            this.playSfx('birth', 0.3);
+            this.spawnFloatingText(h.x, h.y - 26, '+1 Brave Born', '#f4c95d');
+            this.onHudSync();
+          }
+          // Release breeding pair back to patrol
+          for (const b of this.braves) {
+            if (b.fsm === 'breeding' && b.targetHut === h) {
+              b.fsm = 'patrol';
+              b.targetHut = null;
+              b.sprite.setVisible(true);
+              b.x = h.x + Phaser.Math.Between(-16, 16);
+              b.y = h.y + 16;
+            }
+          }
+          h.occupants = 0;
+        }
+      } else {
+        h.barBg.setVisible(false);
+        h.barFill.setVisible(false);
+      }
+    }
+
+    this.ensureBuildSite();
 
     for (const b of this.braves) {
-      if (b.task === 'idle') {
-        if (this.blueprint && !b.carryingWood) {
-          // Find nearest live tree
-          let best: TreeNode | null = null;
-          let bestD = Infinity;
-          for (const t of this.trees) {
-            if (t.chopped) continue;
-            const d = Phaser.Math.Distance.Between(b.x, b.y, t.x, t.y);
-            if (d < bestD) {
-              bestD = d;
-              best = t;
-            }
-          }
-          if (best) {
-            b.targetTree = best;
-            b.task = 'seek_tree';
-          }
-        } else {
-          // Calmly patrol near idle point
-          const d = Phaser.Math.Distance.Between(b.x, b.y, b.idleX, b.idleY);
-          if (d > 6) {
-            const dx = (b.idleX - b.x) / d;
-            const dy = (b.idleY - b.y) / d;
-            b.x += dx * 42 * dt;
-            b.y += dy * 42 * dt;
-            b.dir = dir4FromVec(dx, dy);
-            const k = `brave_blue_walk_d${b.dir}`;
-            if (this.anims.exists(k) && b.sprite.anims.currentAnim?.key !== k) b.sprite.play(k);
-          } else {
-            b.sprite.anims.pause();
-            if (Math.random() < 0.3 * dt) {
-              b.idleX = WORLD_W / 2 + Phaser.Math.Between(-110, 110);
-              b.idleY = WORLD_H / 2 + Phaser.Math.Between(-70, 70);
-            }
+      if (b.fsm === 'breeding') continue;
+
+      if (b.fsm === 'patrol') {
+        // 1) If >= 3 huts exist and pop < cap, send a pair of Braves into an open hut to breed
+        if (p.hutsBuilt >= 3 && p.loyalPop < popCap) {
+          const openHut = this.playerHuts.find((h) => h.occupants < 2);
+          const breedingBraves = this.braves.filter((x) => x.fsm === 'enter_hut' || x.fsm === 'breeding').length;
+          if (openHut && breedingBraves < 2) {
+            b.targetHut = openHut;
+            b.fsm = 'enter_hut';
+            continue;
           }
         }
-      } else if (b.task === 'seek_tree') {
+
+        // 2) If there is an active blueprint AND a live tree, go chop wood
+        if (this.buildSite) {
+          const tree = this.findNearestTree(b.x, b.y);
+          if (tree) {
+            b.targetTree = tree;
+            b.fsm = 'seek_tree';
+            continue;
+          }
+        }
+
+        // 3) If no wood to chop and an enemy is nearby, fight!
+        const nearbyEnemy = this.findNearestEnemy(b.x, b.y, 160);
+        if (nearbyEnemy) {
+          b.targetEnemy = nearbyEnemy;
+          b.fsm = 'fight_enemy';
+          continue;
+        }
+
+        // 4) Otherwise walk calmly & pause
+        const d = Phaser.Math.Distance.Between(b.x, b.y, b.patrolX, b.patrolY);
+        if (d > 6) {
+          const dx = (b.patrolX - b.x) / d;
+          const dy = (b.patrolY - b.y) / d;
+          b.x += dx * 42 * dt;
+          b.y += dy * 42 * dt;
+          b.dir = dir8FromVec(dx, dy);
+          this.playBraveAnim(b, 'run');
+        } else {
+          this.playBraveAnim(b, 'pray');
+          b.timer -= dt;
+          if (b.timer <= 0) {
+            b.patrolX = WORLD_W / 2 + Phaser.Math.Between(-120, 120);
+            b.patrolY = WORLD_H / 2 + Phaser.Math.Between(-80, 80);
+            b.timer = Phaser.Math.FloatBetween(1.4, 3.2);
+          }
+        }
+      } else if (b.fsm === 'enter_hut') {
+        const h = b.targetHut;
+        if (!h || h.occupants >= 2) {
+          b.targetHut = null;
+          b.fsm = 'patrol';
+        } else {
+          const d = Phaser.Math.Distance.Between(b.x, b.y, h.x, h.y + 8);
+          if (d <= 14) {
+            h.occupants += 1;
+            b.fsm = 'breeding';
+            b.sprite.setVisible(false);
+          } else {
+            const dx = (h.x - b.x) / d;
+            const dy = (h.y + 8 - b.y) / d;
+            b.x += dx * 56 * dt;
+            b.y += dy * 56 * dt;
+            b.dir = dir8FromVec(dx, dy);
+            this.playBraveAnim(b, 'run');
+          }
+        }
+      } else if (b.fsm === 'seek_tree') {
         const t = b.targetTree;
-        if (!t || t.chopped || !this.blueprint) {
-          b.task = 'idle';
+        if (!t || t.chopped || !this.buildSite) {
           b.targetTree = null;
+          b.fsm = 'patrol';
         } else {
           const d = Phaser.Math.Distance.Between(b.x, b.y, t.x, t.y + 6);
-          if (d <= 14) {
-            b.task = 'chop_tree';
-            b.workTimer = 1.4 / timberMult;
-            const wk = `brave_blue_work_d${b.dir}`;
-            if (this.anims.exists(wk)) b.sprite.play(wk);
+          if (d <= 16) {
+            b.fsm = 'chop_tree';
+            b.dir = dir8FromVec(t.x - b.x, t.y - b.y);
+            b.timer = 1.6 / timberMult;
+            this.playBraveAnim(b, 'work');
           } else {
             const dx = (t.x - b.x) / d;
             const dy = (t.y + 6 - b.y) / d;
             b.x += dx * 56 * dt;
             b.y += dy * 56 * dt;
-            b.dir = dir4FromVec(dx, dy);
-            const wk = `brave_blue_walk_d${b.dir}`;
-            if (this.anims.exists(wk) && b.sprite.anims.currentAnim?.key !== wk) b.sprite.play(wk);
+            b.dir = dir8FromVec(dx, dy);
+            this.playBraveAnim(b, 'run');
           }
         }
-      } else if (b.task === 'chop_tree') {
-        b.workTimer -= dt;
-        if (b.workTimer <= 0) {
+      } else if (b.fsm === 'chop_tree') {
+        this.playBraveAnim(b, 'work');
+        b.timer -= dt;
+        if (b.timer <= 0) {
           if (b.targetTree && !b.targetTree.chopped) {
             b.targetTree.chopped = true;
-            b.targetTree.regrowTimer = 25;
+            b.targetTree.regrowTimer = 75; // Slow regrowth
             b.targetTree.sprite.setFrame('tree_stump');
           }
           b.carryingWood = true;
           b.targetTree = null;
-          b.task = this.blueprint ? 'carry_wood' : 'idle';
+          b.fsm = this.buildSite ? 'carry_wood' : 'patrol';
         }
-      } else if (b.task === 'carry_wood') {
-        if (!this.blueprint) {
+      } else if (b.fsm === 'carry_wood') {
+        if (!this.buildSite) {
           b.carryingWood = false;
-          b.task = 'idle';
+          b.fsm = 'patrol';
         } else {
-          const d = Phaser.Math.Distance.Between(b.x, b.y, this.blueprint.x, this.blueprint.y + 10);
-          if (d <= 18) {
-            b.task = 'build_hut';
-            b.workTimer = 0.85 / timberMult;
-            const wk = `brave_blue_work_d${b.dir}`;
-            if (this.anims.exists(wk)) b.sprite.play(wk);
+          const d = Phaser.Math.Distance.Between(b.x, b.y, this.buildSite.x, this.buildSite.y + 10);
+          if (d <= 20) {
+            b.fsm = 'build_site';
+            b.dir = dir8FromVec(this.buildSite.x - b.x, this.buildSite.y - b.y);
+            b.timer = 0.9 / timberMult;
+            this.playBraveAnim(b, 'work');
           } else {
-            const dx = (this.blueprint.x - b.x) / d;
-            const dy = (this.blueprint.y + 10 - b.y) / d;
-            b.x += dx * 52 * dt;
-            b.y += dy * 52 * dt;
-            b.dir = dir4FromVec(dx, dy);
-            const wk = `brave_blue_walk_d${b.dir}`;
-            if (this.anims.exists(wk) && b.sprite.anims.currentAnim?.key !== wk) b.sprite.play(wk);
+            const dx = (this.buildSite.x - b.x) / d;
+            const dy = (this.buildSite.y + 10 - b.y) / d;
+            b.x += dx * 50 * dt;
+            b.y += dy * 50 * dt;
+            b.dir = dir8FromVec(dx, dy);
+            this.playBraveAnim(b, 'run');
           }
         }
-      } else if (b.task === 'build_hut') {
-        b.workTimer -= dt;
-        if (b.workTimer <= 0) {
+      } else if (b.fsm === 'build_site') {
+        this.playBraveAnim(b, 'work');
+        b.timer -= dt;
+        if (b.timer <= 0) {
           b.carryingWood = false;
-          b.task = 'idle';
-          if (this.blueprint) {
-            this.blueprint.woodDelivered += 1;
-            const frac = Math.min(1, this.blueprint.woodDelivered / this.blueprint.woodNeeded);
-            this.blueprint.barFill.setSize(36 * frac, 3);
-            if (this.blueprint.woodDelivered === 1) {
-              this.blueprint.sprite.setFrame('hut_frame_blue');
-            }
-            if (this.blueprint.woodDelivered >= this.blueprint.woodNeeded) {
-              const bx = this.blueprint.x;
-              const by = this.blueprint.y;
-              this.blueprint.sprite.destroy();
-              this.blueprint.barBg.destroy();
-              this.blueprint.barFill.destroy();
-              this.blueprint = null;
-              onHutConstructed(this.state);
-              this.syncPlayerHutSprites();
+          b.fsm = 'patrol';
+          if (this.buildSite) {
+            this.buildSite.woodDelivered += 1;
+            const frac = Math.min(1, this.buildSite.woodDelivered / this.buildSite.woodNeeded);
+            this.buildSite.barFill.setSize(36 * frac, 3);
+            if (this.buildSite.woodDelivered === 1) this.buildSite.sprite.setFrame('hut_frame_blue');
+            if (this.buildSite.woodDelivered >= this.buildSite.woodNeeded) {
+              const finishedKind = this.buildSite.kind;
+              const bx = this.buildSite.x;
+              const by = this.buildSite.y;
+              this.buildSite.sprite.destroy();
+              this.buildSite.barBg.destroy();
+              this.buildSite.barFill.destroy();
+              this.buildSite = null;
+              onBuildingConstructed(this.state, finishedKind);
+              this.syncBuiltStructures();
+              this.syncUnitActors();
               this.playSfx('birth', 0.4);
-              this.spawnFloatingText(bx, by - 20, 'Hut Built!', '#f4c95d');
+              const label =
+                finishedKind === 'hut'
+                  ? 'Hut Built!'
+                  : finishedKind === 'warrior_hut'
+                    ? 'Warrior Hut Built!'
+                    : finishedKind === 'temple'
+                      ? 'Temple Built!'
+                      : finishedKind === 'firewarrior_hut'
+                        ? 'Fire Warrior Hut Built!'
+                        : 'Guard Tower Built!';
+              this.spawnFloatingText(bx, by - 22, label, '#f4c95d');
               this.onHudSync();
             }
+          }
+        }
+      } else if (b.fsm === 'fight_enemy') {
+        const e = b.targetEnemy;
+        if (!e || e.dead) {
+          b.targetEnemy = null;
+          b.fsm = 'patrol';
+        } else {
+          const d = Phaser.Math.Distance.Between(b.x, b.y, e.x, e.y);
+          if (d <= 24) {
+            b.dir = dir8FromVec(e.x - b.x, e.y - b.y);
+            this.playBraveAnim(b, 'punch');
+            b.timer -= dt;
+            if (b.timer <= 0) {
+              b.timer = 0.8;
+              e.hp -= 6;
+              this.playSfx('punch', 0.22);
+              if (e.hp <= 0) this.killEnemy(e);
+            }
+          } else {
+            const dx = (e.x - b.x) / d;
+            const dy = (e.y - b.y) / d;
+            b.x += dx * 60 * dt;
+            b.y += dy * 60 * dt;
+            b.dir = dir8FromVec(dx, dy);
+            this.playBraveAnim(b, 'run');
           }
         }
       }
@@ -890,12 +1167,159 @@ export class PlanetScene extends Phaser.Scene {
     }
   }
 
+  /** Strict role behaviors: Warriors ONLY fight, Preachers ONLY convert enemies, Fire Warriors shoot fireballs / man Guard Towers. */
+  private updateSpecialists(dt: number): void {
+    const bloodlustMult = (this.state.activeBuffs.bloodlust ?? 0) > 0 ? 1.8 : 1;
+
+    for (const s of this.specialists) {
+      s.attackTimer = Math.max(0, s.attackTimer - dt * bloodlustMult);
+
+      if (s.kind === 'warrior') {
+        // Warriors ONLY fight: chase nearest enemy unit or enemy hut
+        const enemy = this.findNearestEnemy(s.x, s.y, 900);
+        if (enemy) {
+          const d = Phaser.Math.Distance.Between(s.x, s.y, enemy.x, enemy.y);
+          if (d <= 26) {
+            s.dir = dir4FromVec(enemy.x - s.x, enemy.y - s.y);
+            const pk = `warrior_blue_punch_d${s.dir}`;
+            if (this.anims.exists(pk) && s.sprite.anims.currentAnim?.key !== pk) s.sprite.play(pk);
+            if (s.attackTimer <= 0) {
+              s.attackTimer = 0.65;
+              enemy.hp -= 12;
+              this.playSfx('punch', 0.25);
+              if (enemy.hp <= 0) this.killEnemy(enemy);
+            }
+          } else {
+            const dx = (enemy.x - s.x) / d;
+            const dy = (enemy.y - s.y) / d;
+            s.x += dx * 68 * dt;
+            s.y += dy * 68 * dt;
+            s.dir = dir4FromVec(dx, dy);
+            const rk = `warrior_blue_run_d${s.dir}`;
+            if (this.anims.exists(rk) && s.sprite.anims.currentAnim?.key !== rk) s.sprite.play(rk);
+          }
+        } else if (this.enemyHuts.length > 0) {
+          const eh = this.enemyHuts[0];
+          const d = Phaser.Math.Distance.Between(s.x, s.y, eh.x, eh.y);
+          if (d <= 34) {
+            s.dir = dir4FromVec(eh.x - s.x, eh.y - s.y);
+            const pk = `warrior_blue_punch_d${s.dir}`;
+            if (this.anims.exists(pk) && s.sprite.anims.currentAnim?.key !== pk) s.sprite.play(pk);
+            if (s.attackTimer <= 0) {
+              s.attackTimer = 0.8;
+              eh.hp -= 10;
+              this.playSfx('punch', 0.22);
+              if (eh.hp <= 0) {
+                eh.sprite.destroy();
+                this.enemyHuts.shift();
+                applyCombatResult(this.state, 0, 1, 0);
+                this.spawnFloatingText(eh.x, eh.y, '-1 Enemy Hut', '#ffb703');
+                this.onHudSync();
+              }
+            }
+          } else {
+            const dx = (eh.x - s.x) / d;
+            const dy = (eh.y - s.y) / d;
+            s.x += dx * 64 * dt;
+            s.y += dy * 64 * dt;
+            s.dir = dir4FromVec(dx, dy);
+            const rk = `warrior_blue_run_d${s.dir}`;
+            if (this.anims.exists(rk) && s.sprite.anims.currentAnim?.key !== rk) s.sprite.play(rk);
+          }
+        }
+      } else if (s.kind === 'preacher') {
+        // Preachers ONLY convert enemy followers
+        const enemy = this.findNearestEnemy(s.x, s.y, 900);
+        if (enemy) {
+          const d = Phaser.Math.Distance.Between(s.x, s.y, enemy.x, enemy.y);
+          if (d <= 82) {
+            s.convertProgress += dt;
+            if (s.convertProgress >= 2.8) {
+              s.convertProgress = 0;
+              const ex = enemy.x;
+              const ey = enemy.y;
+              enemy.dead = true;
+              enemy.sprite.destroy();
+              enemy.shadow.destroy();
+              enemy.hpBg.destroy();
+              enemy.hpFill.destroy();
+              onEnemyConvertedByPreacher(this.state);
+              this.spawnBrave(ex, ey);
+              this.playSfx('convert', 0.3);
+              this.spawnFloatingText(ex, ey, 'Converted!', '#72efdd');
+              this.onHudSync();
+            }
+          } else {
+            const dx = (enemy.x - s.x) / d;
+            const dy = (enemy.y - s.y) / d;
+            s.x += dx * 52 * dt;
+            s.y += dy * 52 * dt;
+            s.sprite.setFlipX(dx < 0);
+          }
+        }
+      } else if (s.kind === 'firewarrior') {
+        // Fire Warriors shoot fireballs from Guard Towers or while roaming
+        const range = s.garrisonedTowerIdx >= 0 ? 320 : 210;
+        const enemy = this.findNearestEnemy(s.x, s.y, range);
+        if (enemy && s.attackTimer <= 0) {
+          s.attackTimer = s.garrisonedTowerIdx >= 0 ? 1.4 : 1.7;
+          s.sprite.setFlipX(enemy.x < s.x);
+          this.playSfx('fire', 0.22);
+          this.fireProjectile(s.x, s.y - 18, enemy.x, enemy.y - 12, 'vfx_fireball', () => {
+            if (!enemy.dead) {
+              enemy.hp -= 16;
+              if (enemy.hp <= 0) this.killEnemy(enemy);
+            }
+          });
+        } else if (s.garrisonedTowerIdx < 0) {
+          // Roam toward enemies when not garrisoned in a Guard Tower
+          const farEnemy = this.findNearestEnemy(s.x, s.y, 900);
+          if (farEnemy) {
+            const d = Phaser.Math.Distance.Between(s.x, s.y, farEnemy.x, farEnemy.y);
+            if (d > 175) {
+              const dx = (farEnemy.x - s.x) / d;
+              const dy = (farEnemy.y - s.y) / d;
+              s.x += dx * 52 * dt;
+              s.y += dy * 52 * dt;
+              s.sprite.setFlipX(dx < 0);
+            }
+          }
+        }
+      }
+
+      s.sprite.setPosition(s.x, s.y).setDepth(s.garrisonedTowerIdx >= 0 ? s.y + 40 : s.y);
+    }
+  }
+
   private updateEnemiesAndRivals(dt: number): void {
+    const p = this.state.planets[this.state.activePlanetId];
+    const cfg = getPlanetConfig(p.planetId);
+
+    // Periodic enemy raids once the player has built at least 1 Hut (keeps opening calm, then ramps combat!)
+    if (p.hutsBuilt >= 1 && this.enemyHuts.length > 0) {
+      this.enemyRaidTimer -= dt;
+      if (this.enemyRaidTimer <= 0) {
+        this.enemyRaidTimer = Math.max(6, 14 - cfg.id * 0.5);
+        const aliveEnemies = this.enemies.filter((e) => !e.dead);
+        if (aliveEnemies.length < 7) {
+          const eh = this.enemyHuts[Phaser.Math.Between(0, this.enemyHuts.length - 1)];
+          this.spawnEnemy(eh.tribe, eh.x, eh.y + 18);
+        }
+        // Send 1-2 enemy warriors marching toward the player's village
+        for (const e of aliveEnemies.slice(0, 2)) {
+          e.targetX = WORLD_W / 2 + Phaser.Math.Between(-90, 90);
+          e.targetY = WORLD_H / 2 + Phaser.Math.Between(-70, 70);
+        }
+      }
+    }
+
     for (let i = this.enemies.length - 1; i >= 0; i--) {
       const e = this.enemies[i];
-      if (e.dead) continue;
+      if (e.dead) {
+        this.enemies.splice(i, 1);
+        continue;
+      }
 
-      // Parabolic Blast knockback arc
       if (e.airZ > 0 || e.vz !== 0) {
         e.x = Phaser.Math.Clamp(e.x + e.knockVx * dt, 100, WORLD_W - 100);
         e.y = Phaser.Math.Clamp(e.y + e.knockVy * dt, 100, WORLD_H - 100);
@@ -904,36 +1328,67 @@ export class PlanetScene extends Phaser.Scene {
         if (e.airZ <= 0) {
           e.airZ = 0;
           e.vz = 0;
-          e.knockVx = 0;
-          e.knockVy = 0;
-          e.dead = true;
-          e.sprite.destroy();
-          e.shadow.destroy();
+          this.killEnemy(e);
           this.enemies.splice(i, 1);
           continue;
         }
       } else {
-        const dist = Phaser.Math.Distance.Between(e.x, e.y, e.targetX, e.targetY);
-        if (dist < 6) {
-          e.waitTimer -= dt;
-          e.sprite.anims.pause();
-          if (e.waitTimer <= 0) {
-            e.targetX = Phaser.Math.Clamp(e.x + Phaser.Math.Between(-90, 90), 180, WORLD_W - 180);
-            e.targetY = Phaser.Math.Clamp(e.y + Phaser.Math.Between(-70, 70), 150, WORLD_H - 150);
-            e.waitTimer = Phaser.Math.FloatBetween(1.0, 2.6);
+        e.attackTimer = Math.max(0, e.attackTimer - dt);
+        // Check if a player follower is close enough to melee
+        const nearWarrior = this.specialists.find((s) => s.garrisonedTowerIdx < 0 && Phaser.Math.Distance.Between(e.x, e.y, s.x, s.y) <= 28);
+        const nearBrave = this.braves.find((b) => b.fsm !== 'breeding' && Phaser.Math.Distance.Between(e.x, e.y, b.x, b.y) <= 26);
+
+        if (nearWarrior || nearBrave) {
+          const tx = nearWarrior ? nearWarrior.x : nearBrave!.x;
+          const ty = nearWarrior ? nearWarrior.y : nearBrave!.y;
+          e.dir = dir4FromVec(tx - e.x, ty - e.y);
+          const pk = `warrior_${e.tribe}_punch_d${e.dir}`;
+          if (this.anims.exists(pk) && e.sprite.anims.currentAnim?.key !== pk) e.sprite.play(pk);
+          if (e.attackTimer <= 0) {
+            e.attackTimer = 0.9;
+            if ((this.state.activeBuffs.shield ?? 0) <= 0) {
+              if (nearWarrior) {
+                nearWarrior.hp -= 8;
+                if (nearWarrior.hp <= 0) {
+                  applyCombatResult(this.state, 0, 0, 1);
+                  this.syncUnitActors();
+                }
+              } else if (nearBrave) {
+                nearBrave.hp -= 8;
+                if (nearBrave.hp <= 0) {
+                  applyCombatResult(this.state, 0, 0, 1);
+                  this.syncUnitActors();
+                }
+              }
+            }
           }
         } else {
-          const dx = (e.targetX - e.x) / dist;
-          const dy = (e.targetY - e.y) / dist;
-          e.x += dx * 44 * dt;
-          e.y += dy * 44 * dt;
-          e.dir = dir4FromVec(dx, dy);
-          const rk = `warrior_${e.tribe}_run_d${e.dir}`;
-          if (this.anims.exists(rk) && e.sprite.anims.currentAnim?.key !== rk) e.sprite.play(rk);
+          const dist = Phaser.Math.Distance.Between(e.x, e.y, e.targetX, e.targetY);
+          if (dist < 6) {
+            e.waitTimer -= dt;
+            e.sprite.anims.pause();
+            if (e.waitTimer <= 0) {
+              e.targetX = Phaser.Math.Clamp(e.x + Phaser.Math.Between(-90, 90), 180, WORLD_W - 180);
+              e.targetY = Phaser.Math.Clamp(e.y + Phaser.Math.Between(-70, 70), 150, WORLD_H - 150);
+              e.waitTimer = Phaser.Math.FloatBetween(1.0, 2.6);
+            }
+          } else {
+            const dx = (e.targetX - e.x) / dist;
+            const dy = (e.targetY - e.y) / dist;
+            e.x += dx * 44 * dt;
+            e.y += dy * 44 * dt;
+            e.dir = dir4FromVec(dx, dy);
+            const rk = `warrior_${e.tribe}_run_d${e.dir}`;
+            if (this.anims.exists(rk) && e.sprite.anims.currentAnim?.key !== rk) e.sprite.play(rk);
+          }
         }
       }
+
       e.shadow.setPosition(e.x, e.y).setDepth(e.y - 2);
       e.sprite.setPosition(e.x, e.y - e.airZ).setDepth(e.y + (e.airZ > 0 ? 300 : 0));
+      const showHp = e.hp < e.maxHp && e.airZ === 0;
+      e.hpBg.setVisible(showHp).setPosition(e.x, e.y - 42);
+      e.hpFill.setVisible(showHp).setPosition(e.x - 10, e.y - 42).setSize(20 * Math.max(0, e.hp / e.maxHp), 2);
     }
 
     for (const rs of this.rivalShamans) {
@@ -962,18 +1417,41 @@ export class PlanetScene extends Phaser.Scene {
     }
   }
 
+  private findNearestTree(x: number, y: number): TreeNode | null {
+    let best: TreeNode | null = null;
+    let bestD = Infinity;
+    for (const t of this.trees) {
+      if (t.chopped) continue;
+      const d = Phaser.Math.Distance.Between(x, y, t.x, t.y);
+      if (d < bestD) {
+        bestD = d;
+        best = t;
+      }
+    }
+    return best;
+  }
+
+  private findNearestEnemy(x: number, y: number, maxDist: number): EnemyActor | null {
+    let best: EnemyActor | null = null;
+    let bestD = maxDist;
+    for (const e of this.enemies) {
+      if (e.dead || e.airZ > 0) continue;
+      const d = Phaser.Math.Distance.Between(x, y, e.x, e.y);
+      if (d < bestD) {
+        bestD = d;
+        best = e;
+      }
+    }
+    return best;
+  }
+
   update(_time: number, deltaMs: number): void {
     const dt = Math.min(0.05, deltaMs / 1000);
     const activeP = this.state.planets[this.state.activePlanetId];
-    if (
-      this.currentPlanetRendered !== this.state.activePlanetId ||
-      this.renderedAllied !== activeP.allied ||
-      this.renderedTowers !== Math.min(4, activeP.towersBuilt)
-    ) {
+    if (this.currentPlanetRendered !== this.state.activePlanetId || this.renderedAllied !== activeP.allied) {
       this.rebuildPlanetVisuals();
     }
 
-    // Player Shaman movement (directional 8-way animations)
     let dx = this.joystickVec.x;
     let dy = this.joystickVec.y;
     if (this.cursors) {
@@ -1015,12 +1493,14 @@ export class PlanetScene extends Phaser.Scene {
     }
 
     this.updateConvertCircles(dt);
-    this.updateBravesAndTrees(dt);
+    this.updateBravesAndHuts(dt);
+    this.updateSpecialists(dt);
     this.updateEnemiesAndRivals(dt);
 
     this.simAccum += dt;
     if (this.simAccum >= 0.25) {
       this.simAccum = 0;
+      this.syncUnitActors();
       this.onHudSync();
     }
   }
