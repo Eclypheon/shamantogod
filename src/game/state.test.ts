@@ -8,8 +8,12 @@ import {
   createInitialState,
   formAlliance,
   getCastRangePx,
+  getMaxHutsForPop,
+  getMaxTrainingBuildings,
+  getRoleUnitCap,
   hydrateState,
   isMetaNodeVisible,
+  onBraveTrained,
   onBuildingConstructed,
   onShamanDied,
   onWildmanConverted,
@@ -37,19 +41,25 @@ describe('Shaman to God simulation', () => {
     expect(state.divineEssence).toBe(res.bankedEssence);
   });
 
-  it('orders Warrior Hut with Mana and automatically trains ~10% Warriors once Braves build it', () => {
+  it('enforces proportional Hut cap (6 Braves = 1 Hut), 30% unit cap, and physical training via onBraveTrained', () => {
     const state = createInitialState();
     state.mana = 500;
+    for (let i = 0; i < 6; i++) onWildmanConverted(state);
+    expect(getMaxHutsForPop(state.planets[1])).toBe(1);
+    onWildmanConverted(state); // 7th Brave -> allows 2nd Hut
+    expect(getMaxHutsForPop(state.planets[1])).toBe(2);
+
     onBuildingConstructed(state, 'hut');
-    for (let i = 0; i < 10; i++) onWildmanConverted(state);
-
     expect(orderBuilding(state, 1, 'warrior_hut')).toBe(true);
-    expect(state.planets[1].warriorHutOrdered).toBe(true);
-    expect(state.planets[1].warriors).toBe(0);
-
     onBuildingConstructed(state, 'warrior_hut');
-    expect(state.planets[1].warriorHutBuilt).toBe(true);
-    expect(state.planets[1].warriors).toBe(1); // 10% of 10
+    // No instant magic promotion until a Brave physically finishes training inside the hut
+    expect(state.planets[1].warriors).toBe(0);
+    expect(getRoleUnitCap(state.planets[1], 'warrior')).toBe(2); // 30% of 7 = 2
+    expect(getMaxTrainingBuildings(state.planets[1], 'warrior')).toBe(1);
+
+    expect(onBraveTrained(state, 'warrior')).toBe(true);
+    expect(state.planets[1].warriors).toBe(1);
+    expect(state.planets[1].braves).toBe(6);
 
     // Guardhouse requires Fire Warrior Hut first
     expect(orderBuilding(state, 1, 'guard_tower')).toBe(false);

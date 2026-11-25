@@ -282,17 +282,57 @@ export function orderBuilding(
   return false;
 }
 
-/** Automatically allocates ~10% of population per built training structure (hidden from player). */
+export function getMaxHutsForPop(p: PlanetProgress): number {
+  if (p.loyalPop <= 0) return 0;
+  return Math.min(8, Math.max(1, Math.ceil(p.loyalPop / 6)));
+}
+
+/** Hidden target cap for a trained role: 30% of followers once its training building is built. */
+export function getRoleUnitCap(p: PlanetProgress, role: 'warrior' | 'preacher' | 'firewarrior'): number {
+  const built =
+    role === 'warrior'
+      ? p.warriorHutBuilt
+      : role === 'preacher'
+        ? p.templeBuilt
+        : p.fireWarriorHutBuilt;
+  if (!built) return 0;
+  return Math.max(1, Math.floor(p.loyalPop * 0.3));
+}
+
+/** Proportional training building limit: 1 per 20 of that role's unit cap (Guardhouses are exempt). */
+export function getMaxTrainingBuildings(p: PlanetProgress, role: 'warrior' | 'preacher' | 'firewarrior'): number {
+  const cap = Math.max(1, getRoleUnitCap(p, role));
+  return Math.max(1, Math.ceil(cap / 20));
+}
+
+/** Called when a Brave finishes physical training inside a Training Building and pops out as a specialist. */
+export function onBraveTrained(state: GameState, role: 'warrior' | 'preacher' | 'firewarrior'): boolean {
+  const p = state.planets[state.activePlanetId];
+  if (p.braves <= 0) return false;
+  p.braves -= 1;
+  if (role === 'warrior') p.warriors += 1;
+  else if (role === 'preacher') p.preachers += 1;
+  else p.fireWarriors += 1;
+  updateDominanceAndUnlocks(state, p);
+  return true;
+}
+
+/** Keeps unit counts consistent with loyalPop without magically auto-promoting Braves (training happens inside buildings). */
 export function rebalanceUnits(p: PlanetProgress): void {
-  const total = p.loyalPop;
-  const warriors = p.warriorHutBuilt ? Math.max(1, Math.floor(total * 0.1)) : 0;
-  const preachers = p.templeBuilt ? Math.max(1, Math.floor(total * 0.1)) : 0;
-  const fireWarriors = p.fireWarriorHutBuilt ? Math.max(1, Math.floor(total * 0.1)) : 0;
-  const trained = Math.min(total, warriors + preachers + fireWarriors);
-  p.warriors = Math.min(warriors, trained);
-  p.preachers = Math.min(preachers, Math.max(0, trained - p.warriors));
-  p.fireWarriors = Math.min(fireWarriors, Math.max(0, trained - p.warriors - p.preachers));
-  p.braves = Math.max(0, total - p.warriors - p.preachers - p.fireWarriors);
+  const trained = p.warriors + p.preachers + p.fireWarriors;
+  if (trained > p.loyalPop) {
+    // Trim specialists only if population dropped below trained count due to combat losses
+    let excess = trained - p.loyalPop;
+    const cutW = Math.min(p.warriors, excess);
+    p.warriors -= cutW;
+    excess -= cutW;
+    const cutP = Math.min(p.preachers, excess);
+    p.preachers -= cutP;
+    excess -= cutP;
+    const cutF = Math.min(p.fireWarriors, excess);
+    p.fireWarriors -= cutF;
+  }
+  p.braves = Math.max(0, p.loyalPop - p.warriors - p.preachers - p.fireWarriors);
 }
 
 export function onWildmanConverted(state: GameState): boolean {
@@ -328,7 +368,6 @@ export function onBuildingConstructed(state: GameState, kind: BuildingBlueprintK
   else if (kind === 'temple') p.templeBuilt = true;
   else if (kind === 'firewarrior_hut') p.fireWarriorHutBuilt = true;
   else if (kind === 'guard_tower') p.towersBuilt = Math.min(4, p.towersBuilt + 1);
-  rebalanceUnits(p);
   updateDominanceAndUnlocks(state, p);
 }
 

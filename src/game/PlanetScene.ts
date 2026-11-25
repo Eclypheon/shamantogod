@@ -4,9 +4,11 @@ import {
   applyCombatResult,
   castSpell,
   getCastRangePx,
+  getMaxHutsForPop,
   getPlanetConfig,
   getPopCap,
   getPreacherSpeedMult,
+  getRoleUnitCap,
   getShamanMaxHp,
   getSpellPowerMult,
   getTimberSpeedMult,
@@ -14,6 +16,7 @@ import {
   getTreeRegrowSec,
   getWarriorPowerMult,
   onBraveBred,
+  onBraveTrained,
   onBuildingConstructed,
   onEnemyConvertedByPreacher,
   onShamanDied,
@@ -31,9 +34,27 @@ type BraveState =
   | 'chop_tree'
   | 'carry_wood'
   | 'build_site'
+  | 'repair_building'
   | 'enter_hut'
   | 'breeding'
+  | 'go_train'
+  | 'training'
   | 'fight_enemy';
+
+interface TrainingBuildingNode {
+  role: 'warrior' | 'preacher' | 'firewarrior';
+  x: number;
+  y: number;
+  sprite: Phaser.GameObjects.Sprite;
+  hp: number;
+  maxHp: number;
+  hpBg: Phaser.GameObjects.Rectangle;
+  hpFill: Phaser.GameObjects.Rectangle;
+  occupant: BraveActor | null;
+  trainTimer: number;
+  barBg: Phaser.GameObjects.Rectangle;
+  barFill: Phaser.GameObjects.Rectangle;
+}
 
 interface TreeNode {
   x: number;
@@ -89,6 +110,8 @@ interface BraveActor {
   fsm: BraveState;
   targetTree: TreeNode | null;
   targetHut: PlayerHutNode | null;
+  targetTrainBuilding: TrainingBuildingNode | null;
+  targetRepair: { x: number; y: number; hp: number; maxHp: number } | null;
   targetEnemy: EnemyActor | null;
   timer: number;
   carryingWood: boolean;
@@ -117,6 +140,7 @@ interface EnemyActor {
   hpFill: Phaser.GameObjects.Rectangle;
   tribe: 'red' | 'green' | 'yellow';
   role: 'brave' | 'warrior';
+  insideTraining: boolean;
   trainX: number;
   trainY: number;
   trainTimer: number;
@@ -140,6 +164,11 @@ interface EnemyHutNode {
   sprite: Phaser.GameObjects.Sprite;
   hpBg: Phaser.GameObjects.Rectangle;
   hpFill: Phaser.GameObjects.Rectangle;
+  barBg: Phaser.GameObjects.Rectangle;
+  barFill: Phaser.GameObjects.Rectangle;
+  isTrainingHut: boolean;
+  occupant: EnemyActor | null;
+  trainTimer: number;
   x: number;
   y: number;
   hp: number;
@@ -213,7 +242,7 @@ export class PlanetScene extends Phaser.Scene {
   private trees: TreeNode[] = [];
   private playerHuts: PlayerHutNode[] = [];
   private towers: { x: number; y: number; sprite: Phaser.GameObjects.Sprite }[] = [];
-  private trainingBuildings: Phaser.GameObjects.Sprite[] = [];
+  private trainingBuildings: TrainingBuildingNode[] = [];
   private enemyHuts: EnemyHutNode[] = [];
   private buildSite: BuildSite | null = null;
   private wildmen: WildmanActor[] = [];
@@ -369,12 +398,20 @@ export class PlanetScene extends Phaser.Scene {
     this.playerHuts = [];
     for (const tw of this.towers) tw.sprite.destroy();
     this.towers = [];
-    for (const tb of this.trainingBuildings) tb.destroy();
+    for (const tb of this.trainingBuildings) {
+      tb.sprite.destroy();
+      tb.hpBg.destroy();
+      tb.hpFill.destroy();
+      tb.barBg.destroy();
+      tb.barFill.destroy();
+    }
     this.trainingBuildings = [];
     for (const eh of this.enemyHuts) {
       eh.sprite.destroy();
       eh.hpBg.destroy();
       eh.hpFill.destroy();
+      eh.barBg.destroy();
+      eh.barFill.destroy();
     }
     this.enemyHuts = [];
     if (this.buildSite) {
@@ -472,7 +509,9 @@ export class PlanetScene extends Phaser.Scene {
       const sp = this.add.sprite(bx, by, 'world', `hut_2_${tribe}`).setOrigin(0.5, 0.92).setDepth(by);
       const hpBg = this.add.rectangle(bx, by - 58, 36, 5, 0x1a120a, 0.85).setVisible(false).setDepth(928);
       const hpFill = this.add.rectangle(bx - 17, by - 58, 34, 3, 0xe63946, 1).setOrigin(0, 0.5).setVisible(false).setDepth(929);
-      this.enemyHuts.push({ sprite: sp, hpBg, hpFill, x: bx, y: by, hp: 120, maxHp: 120, tribe });
+      const barBg = this.add.rectangle(bx, by - 50, 30, 4, 0x1a120a, 0.85).setVisible(false).setDepth(920);
+      const barFill = this.add.rectangle(bx - 14, by - 50, 0, 2, 0xf4c95d, 1).setOrigin(0, 0.5).setVisible(false).setDepth(921);
+      this.enemyHuts.push({ sprite: sp, hpBg, hpFill, barBg, barFill, isTrainingHut: false, occupant: null, trainTimer: 0, x: bx, y: by, hp: 120, maxHp: 120, tribe });
     }
 
     // 1 Rival Shaman per rival tribe (can fight, die, and reincarnate!)
@@ -532,11 +571,13 @@ export class PlanetScene extends Phaser.Scene {
       const angle = idx === 0 ? 0 : idx === 1 ? Math.PI : Math.PI / 2;
       const cx = WORLD_W / 2 + Math.cos(angle) * 370;
       const cy = WORLD_H / 2 + Math.sin(angle) * 195;
-      // Rival Warrior Training Hut at their base
+      // Rival Warrior Training Hut at their base (enemy Braves physically enter & queue here)
       const ehSp = this.add.sprite(cx + 36, cy - 28, 'world', `warrior_hut_${tribe}`).setOrigin(0.5, 0.92).setDepth(cy - 28);
       const hpBg = this.add.rectangle(cx + 36, cy - 86, 36, 5, 0x1a120a, 0.85).setVisible(false).setDepth(928);
       const hpFill = this.add.rectangle(cx + 19, cy - 86, 34, 3, 0xe63946, 1).setOrigin(0, 0.5).setVisible(false).setDepth(929);
-      this.enemyHuts.push({ sprite: ehSp, hpBg, hpFill, x: cx + 36, y: cy - 28, hp: 140, maxHp: 140, tribe });
+      const barBg = this.add.rectangle(cx + 36, cy - 78, 30, 4, 0x1a120a, 0.85).setVisible(false).setDepth(920);
+      const barFill = this.add.rectangle(cx + 22, cy - 78, 0, 2, 0xf4c95d, 1).setOrigin(0, 0.5).setVisible(false).setDepth(921);
+      this.enemyHuts.push({ sprite: ehSp, hpBg, hpFill, barBg, barFill, isTrainingHut: true, occupant: null, trainTimer: 0, x: cx + 36, y: cy - 28, hp: 140, maxHp: 140, tribe });
       for (let i = 0; i < 4; i++) {
         this.spawnEnemy(tribe, cx + Phaser.Math.Between(-65, 65), cy + Phaser.Math.Between(-50, 50), i === 0 ? 'warrior' : 'brave', cx + 36, cy - 10);
       }
@@ -567,24 +608,32 @@ export class PlanetScene extends Phaser.Scene {
       this.playerHuts.push({ x: pos.x, y: pos.y, sprite: sp, hp: 120, maxHp: 120, hpBg, hpFill, occupants: 0, breedTimer: 0, barBg, barFill });
     }
 
-    // Re-sync training buildings & guard towers
-    for (const s of this.trainingBuildings) s.destroy();
-    this.trainingBuildings = [];
-    if (p.warriorHutBuilt) {
-      this.trainingBuildings.push(
-        this.add.sprite(WORLD_W / 2 - 135, WORLD_H / 2 - 58, 'world', 'warrior_hut_blue').setOrigin(0.5, 0.92).setDepth(WORLD_H / 2 - 58)
-      );
-    }
-    if (p.templeBuilt) {
-      this.trainingBuildings.push(
-        this.add.sprite(WORLD_W / 2 - 135, WORLD_H / 2 + 68, 'world', 'temple_blue').setOrigin(0.5, 0.92).setDepth(WORLD_H / 2 + 68)
-      );
-    }
-    if (p.fireWarriorHutBuilt) {
-      this.trainingBuildings.push(
-        this.add.sprite(WORLD_W / 2 + 135, WORLD_H / 2 - 58, 'world', 'firewarrior_hut_blue').setOrigin(0.5, 0.92).setDepth(WORLD_H / 2 - 58)
-      );
-    }
+    // Add TrainingBuildingNodes lazily so active occupants/timers are preserved
+    const addTraining = (role: TrainingBuildingNode['role'], frame: string, x: number, y: number) => {
+      if (this.trainingBuildings.some((tb) => tb.role === role)) return;
+      const sp = this.add.sprite(x, y, 'world', frame).setOrigin(0.5, 0.92).setDepth(y);
+      const hpBg = this.add.rectangle(x, y - 66, 36, 5, 0x1a120a, 0.85).setVisible(false).setDepth(928);
+      const hpFill = this.add.rectangle(x - 17, y - 66, 34, 3, 0x52b788, 1).setOrigin(0, 0.5).setVisible(false).setDepth(929);
+      const barBg = this.add.rectangle(x, y - 58, 32, 4, 0x1a120a, 0.85).setVisible(false).setDepth(920);
+      const barFill = this.add.rectangle(x - 15, y - 58, 0, 2, 0xf4c95d, 1).setOrigin(0, 0.5).setVisible(false).setDepth(921);
+      this.trainingBuildings.push({
+        role,
+        x,
+        y,
+        sprite: sp,
+        hp: 140,
+        maxHp: 140,
+        hpBg,
+        hpFill,
+        occupant: null,
+        trainTimer: 0,
+        barBg,
+        barFill,
+      });
+    };
+    if (p.warriorHutBuilt) addTraining('warrior', 'warrior_hut_blue', WORLD_W / 2 - 135, WORLD_H / 2 - 58);
+    if (p.templeBuilt) addTraining('preacher', 'temple_blue', WORLD_W / 2 - 135, WORLD_H / 2 + 68);
+    if (p.fireWarriorHutBuilt) addTraining('firewarrior', 'firewarrior_hut_blue', WORLD_W / 2 + 135, WORLD_H / 2 - 58);
 
     while (this.towers.length < Math.min(4, p.towersBuilt)) {
       const idx = this.towers.length;
@@ -644,7 +693,7 @@ export class PlanetScene extends Phaser.Scene {
       kind = 'guard_tower';
       const idx = p.towersBuilt;
       pos = { x: WORLD_W / 2 + 140 + (idx % 2) * 56, y: WORLD_H / 2 + 35 + Math.floor(idx / 2) * 68 };
-    } else if (p.hutsBuilt < 8) {
+    } else if (p.hutsBuilt < getMaxHutsForPop(p)) {
       kind = 'hut';
       pos = this.getHutSlotPos(p.hutsBuilt);
     }
@@ -695,6 +744,8 @@ export class PlanetScene extends Phaser.Scene {
       fsm: 'patrol',
       targetTree: null,
       targetHut: null,
+      targetTrainBuilding: null,
+      targetRepair: null,
       targetEnemy: null,
       timer: 0.4,
       carryingWood: false,
@@ -703,9 +754,9 @@ export class PlanetScene extends Phaser.Scene {
     });
   }
 
-  private spawnSpecialist(kind: SpecialistActor['kind']): void {
-    const x = WORLD_W / 2 + Phaser.Math.Between(-90, 90);
-    const y = WORLD_H / 2 + Phaser.Math.Between(-60, 60);
+  private spawnSpecialist(kind: SpecialistActor['kind'], spawnX?: number, spawnY?: number): void {
+    const x = spawnX ?? WORLD_W / 2 + Phaser.Math.Between(-90, 90);
+    const y = spawnY ?? WORLD_H / 2 + Phaser.Math.Between(-60, 60);
     const initAnim =
       kind === 'warrior'
         ? 'warrior_blue_run_d1'
@@ -765,6 +816,7 @@ export class PlanetScene extends Phaser.Scene {
       hpFill,
       tribe,
       role,
+      insideTraining: false,
       trainX,
       trainY,
       trainTimer: role === 'brave' ? trainSec : 0,
@@ -876,10 +928,7 @@ export class PlanetScene extends Phaser.Scene {
         eh.hp -= 24 * powerMult * siegeMult;
         this.updateEnemyHutBar(eh);
         if (eh.hp <= 0) {
-          eh.sprite.destroy();
-          eh.hpBg.destroy();
-          eh.hpFill.destroy();
-          this.enemyHuts.splice(i, 1);
+          this.destroyEnemyHut(eh, i);
           hutHits += 1;
           this.spawnFloatingText(eh.x, eh.y, '-1 Enemy Hut', '#ffb703');
         }
@@ -908,6 +957,21 @@ export class PlanetScene extends Phaser.Scene {
       ease: 'Cubic.easeOut',
       onComplete: () => t.destroy(),
     });
+  }
+
+  private destroyEnemyHut(eh: EnemyHutNode, index: number): void {
+    if (eh.occupant) {
+      eh.occupant.insideTraining = false;
+      eh.occupant.sprite.setVisible(true);
+      eh.occupant.shadow.setVisible(true);
+      eh.occupant = null;
+    }
+    eh.sprite.destroy();
+    eh.hpBg.destroy();
+    eh.hpFill.destroy();
+    eh.barBg.destroy();
+    eh.barFill.destroy();
+    this.enemyHuts.splice(index, 1);
   }
 
   private updateEnemyHutBar(eh: EnemyHutNode): void {
@@ -1141,13 +1205,65 @@ export class PlanetScene extends Phaser.Scene {
       }
     }
 
+    // Training Building physical timers (Braves are INSIDE while training, pop out as specialist when done!)
+    for (const tb of this.trainingBuildings) {
+      const tbDamaged = tb.hp < tb.maxHp && tb.hp > 0;
+      tb.hpBg.setVisible(tbDamaged);
+      tb.hpFill.setVisible(tbDamaged).setSize(34 * Math.max(0, tb.hp / tb.maxHp), 3);
+
+      if (tb.occupant) {
+        tb.trainTimer -= dt;
+        tb.barBg.setVisible(true);
+        tb.barFill.setVisible(true).setSize(30 * Math.min(1, (5.0 - tb.trainTimer) / 5.0), 2);
+        if (tb.trainTimer <= 0) {
+          const b = tb.occupant;
+          tb.occupant = null;
+          tb.barBg.setVisible(false);
+          tb.barFill.setVisible(false);
+          const idx = this.braves.indexOf(b);
+          if (idx >= 0) this.braves.splice(idx, 1);
+          b.sprite.destroy();
+          if (onBraveTrained(this.state, tb.role)) {
+            this.spawnSpecialist(tb.role, tb.x, tb.y + 18);
+            this.playSfx('birth', 0.35);
+            const title = tb.role === 'warrior' ? '+1 Warrior' : tb.role === 'preacher' ? '+1 Preacher' : '+1 Fire Warrior';
+            this.spawnFloatingText(tb.x, tb.y - 22, title, '#72efdd');
+            this.onHudSync();
+          }
+        }
+      } else {
+        tb.barBg.setVisible(false);
+        tb.barFill.setVisible(false);
+      }
+    }
+
     this.ensureBuildSite();
 
     for (const b of this.braves) {
-      if (b.fsm === 'breeding') continue;
+      if (b.fsm === 'breeding' || b.fsm === 'training') continue;
 
       if (b.fsm === 'patrol') {
-        // 1) If >= 3 huts exist and pop < cap, send a pair of Braves into an open hut to breed
+        // 1) Physical training: if a training building needs more specialists (below 30% cap), walk there & queue!
+        const neededTb = this.findTrainingBuildingNeedingBrave();
+        if (neededTb) {
+          b.targetTrainBuilding = neededTb;
+          b.fsm = 'go_train';
+          continue;
+        }
+
+        // 2) Building repair: if any player building is damaged and a live tree exists, chop wood & repair it!
+        const damagedBuilding = this.findDamagedPlayerBuilding();
+        if (damagedBuilding) {
+          const tree = this.findNearestTree(b.x, b.y);
+          if (tree) {
+            b.targetRepair = damagedBuilding;
+            b.targetTree = tree;
+            b.fsm = 'seek_tree';
+            continue;
+          }
+        }
+
+        // 3) If >= 3 huts exist and pop < cap, send a pair of Braves into an open hut to breed
         if (p.hutsBuilt >= 3 && p.loyalPop < popCap) {
           const openHut = this.playerHuts.find((h) => h.occupants < 2);
           const breedingBraves = this.braves.filter((x) => x.fsm === 'enter_hut' || x.fsm === 'breeding').length;
@@ -1158,7 +1274,7 @@ export class PlanetScene extends Phaser.Scene {
           }
         }
 
-        // 2) If there is an active blueprint AND a live tree, go chop wood
+        // 4) If there is an active blueprint AND a live tree, go chop wood
         if (this.buildSite) {
           const tree = this.findNearestTree(b.x, b.y);
           if (tree) {
@@ -1168,7 +1284,7 @@ export class PlanetScene extends Phaser.Scene {
           }
         }
 
-        // 3) If no wood to chop and an enemy is nearby, fight!
+        // 5) If no wood to chop and an enemy is nearby, fight!
         const nearbyEnemy = this.findNearestEnemy(b.x, b.y, 160);
         if (nearbyEnemy) {
           b.targetEnemy = nearbyEnemy;
@@ -1176,7 +1292,7 @@ export class PlanetScene extends Phaser.Scene {
           continue;
         }
 
-        // 4) Otherwise walk calmly & pause
+        // 6) Otherwise walk calmly & pause
         const d = Phaser.Math.Distance.Between(b.x, b.y, b.patrolX, b.patrolY);
         if (d > 6) {
           const dx = (b.patrolX - b.x) / d;
@@ -1192,6 +1308,35 @@ export class PlanetScene extends Phaser.Scene {
             b.patrolX = WORLD_W / 2 + Phaser.Math.Between(-120, 120);
             b.patrolY = WORLD_H / 2 + Phaser.Math.Between(-80, 80);
             b.timer = Phaser.Math.FloatBetween(1.4, 3.2);
+          }
+        }
+      } else if (b.fsm === 'go_train') {
+        const tb = b.targetTrainBuilding;
+        if (!tb) {
+          b.fsm = 'patrol';
+        } else {
+          const queueSlotX = tb.x - 12 + (this.braves.indexOf(b) % 3) * 14;
+          const queueSlotY = tb.y + 20;
+          const d = Phaser.Math.Distance.Between(b.x, b.y, queueSlotX, queueSlotY);
+          if (d <= 14) {
+            if (!tb.occupant) {
+              // Step physically inside the training building (NO external training animation!)
+              tb.occupant = b;
+              tb.trainTimer = 5.0;
+              b.fsm = 'training';
+              b.sprite.setVisible(false);
+            } else {
+              // Queue patiently outside the doorway
+              b.dir = dir8FromVec(tb.x - b.x, tb.y - b.y);
+              this.playBraveAnim(b, 'pray');
+            }
+          } else {
+            const dx = (queueSlotX - b.x) / d;
+            const dy = (queueSlotY - b.y) / d;
+            b.x += dx * 46 * dt;
+            b.y += dy * 46 * dt;
+            b.dir = dir8FromVec(dx, dy);
+            this.playBraveAnim(b, 'run');
           }
         }
       } else if (b.fsm === 'enter_hut') {
@@ -1216,8 +1361,9 @@ export class PlanetScene extends Phaser.Scene {
         }
       } else if (b.fsm === 'seek_tree') {
         const t = b.targetTree;
-        if (!t || t.chopped || !this.buildSite) {
+        if (!t || t.chopped || (!this.buildSite && !b.targetRepair)) {
           b.targetTree = null;
+          b.targetRepair = null;
           b.fsm = 'patrol';
         } else {
           const d = Phaser.Math.Distance.Between(b.x, b.y, t.x, t.y + 6);
@@ -1229,8 +1375,8 @@ export class PlanetScene extends Phaser.Scene {
           } else {
             const dx = (t.x - b.x) / d;
             const dy = (t.y + 6 - b.y) / d;
-            b.x += dx * 56 * dt;
-            b.y += dy * 56 * dt;
+            b.x += dx * 44 * dt;
+            b.y += dy * 44 * dt;
             b.dir = dir8FromVec(dx, dy);
             this.playBraveAnim(b, 'run');
           }
@@ -1246,11 +1392,28 @@ export class PlanetScene extends Phaser.Scene {
           }
           b.carryingWood = true;
           b.targetTree = null;
-          b.fsm = this.buildSite ? 'carry_wood' : 'patrol';
+          b.fsm = b.targetRepair || this.buildSite ? 'carry_wood' : 'patrol';
         }
       } else if (b.fsm === 'carry_wood') {
-        if (!this.buildSite) {
+        const repairTarget = b.targetRepair && b.targetRepair.hp < b.targetRepair.maxHp ? b.targetRepair : null;
+        if (repairTarget) {
+          const d = Phaser.Math.Distance.Between(b.x, b.y, repairTarget.x, repairTarget.y + 12);
+          if (d <= 22) {
+            b.fsm = 'repair_building';
+            b.dir = dir8FromVec(repairTarget.x - b.x, repairTarget.y - b.y);
+            b.timer = 1.1 / timberMult;
+            this.playBraveAnim(b, 'work');
+          } else {
+            const dx = (repairTarget.x - b.x) / d;
+            const dy = (repairTarget.y + 12 - b.y) / d;
+            b.x += dx * 42 * dt;
+            b.y += dy * 42 * dt;
+            b.dir = dir8FromVec(dx, dy);
+            this.playBraveAnim(b, 'run');
+          }
+        } else if (!this.buildSite) {
           b.carryingWood = false;
+          b.targetRepair = null;
           b.fsm = 'patrol';
         } else {
           const d = Phaser.Math.Distance.Between(b.x, b.y, this.buildSite.x, this.buildSite.y + 10);
@@ -1262,11 +1425,23 @@ export class PlanetScene extends Phaser.Scene {
           } else {
             const dx = (this.buildSite.x - b.x) / d;
             const dy = (this.buildSite.y + 10 - b.y) / d;
-            b.x += dx * 50 * dt;
-            b.y += dy * 50 * dt;
+            b.x += dx * 42 * dt;
+            b.y += dy * 42 * dt;
             b.dir = dir8FromVec(dx, dy);
             this.playBraveAnim(b, 'run');
           }
+        }
+      } else if (b.fsm === 'repair_building') {
+        this.playBraveAnim(b, 'work');
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          if (b.targetRepair) {
+            b.targetRepair.hp = Math.min(b.targetRepair.maxHp, b.targetRepair.hp + 40);
+            this.spawnFloatingText(b.targetRepair.x, b.targetRepair.y - 24, '+40 Repaired', '#74c69d');
+          }
+          b.carryingWood = false;
+          b.targetRepair = null;
+          b.fsm = 'patrol';
         }
       } else if (b.fsm === 'build_site') {
         this.playBraveAnim(b, 'work');
@@ -1407,10 +1582,7 @@ export class PlanetScene extends Phaser.Scene {
               this.updateEnemyHutBar(eh);
               this.playSfx('punch', 0.22);
               if (eh.hp <= 0) {
-                eh.sprite.destroy();
-                eh.hpBg.destroy();
-                eh.hpFill.destroy();
-                this.enemyHuts.shift();
+                this.destroyEnemyHut(eh, 0);
                 applyCombatResult(this.state, 0, 1, 0);
                 this.spawnFloatingText(eh.x, eh.y, '-1 Enemy Hut', '#ffb703');
                 this.onHudSync();
@@ -1517,6 +1689,35 @@ export class PlanetScene extends Phaser.Scene {
     const p = this.state.planets[this.state.activePlanetId];
     const cfg = getPlanetConfig(p.planetId);
 
+    // Enemy Warrior Hut physical training timers (enemy Brave stays inside, pops out as Warrior!)
+    const trainTotal = Math.max(2.4, 5.0 - (cfg.id - 1) * 0.18);
+    for (const eh of this.enemyHuts) {
+      if (eh.isTrainingHut && eh.occupant) {
+        eh.trainTimer -= dt;
+        eh.barBg.setVisible(true);
+        eh.barFill.setVisible(true).setSize(28 * Math.min(1, (trainTotal - eh.trainTimer) / trainTotal), 2);
+        if (eh.trainTimer <= 0) {
+          const occ = eh.occupant;
+          eh.occupant = null;
+          eh.barBg.setVisible(false);
+          eh.barFill.setVisible(false);
+          occ.insideTraining = false;
+          occ.role = 'warrior';
+          occ.hp = 110;
+          occ.maxHp = 110;
+          occ.x = eh.x;
+          occ.y = eh.y + 20;
+          occ.sprite.setVisible(true);
+          occ.shadow.setVisible(true);
+          const rk = `warrior_${occ.tribe}_run_d1`;
+          if (this.anims.exists(rk)) occ.sprite.play(rk);
+        }
+      } else {
+        eh.barBg.setVisible(false);
+        eh.barFill.setVisible(false);
+      }
+    }
+
     // Periodic enemy raids once the player has built at least 1 Hut (keeps opening calm, then ramps combat!)
     if (p.hutsBuilt >= 1 && this.enemyHuts.length > 0) {
       this.enemyRaidTimer -= dt;
@@ -1560,26 +1761,34 @@ export class PlanetScene extends Phaser.Scene {
           }
         }
       } else if (e.role === 'brave') {
-        // Enemy Braves walk to their training hut and train for 5s (faster on later worlds) into Enemy Warriors
-        const dTrain = Phaser.Math.Distance.Between(e.x, e.y, e.trainX, e.trainY);
-        if (dTrain > 22) {
-          const dx = (e.trainX - e.x) / dTrain;
-          const dy = (e.trainY - e.y) / dTrain;
-          e.x += dx * 38 * dt;
-          e.y += dy * 38 * dt;
-          e.dir = dir4FromVec(dx, dy);
-          const bk = `brave_${e.tribe}_run_d${e.dir}`;
-          if (this.anims.exists(bk) && e.sprite.anims.currentAnim?.key !== bk) e.sprite.play(bk);
+        if (e.insideTraining) continue;
+        // Enemy Braves physically walk to their tribe's Warrior Hut, enter if free, or queue outside!
+        const trainHut = this.enemyHuts.find((h) => h.isTrainingHut && h.tribe === e.tribe);
+        if (!trainHut) {
+          // No training hut left: wander
+          e.sprite.anims.pause();
         } else {
-          const wk = `brave_${e.tribe}_work_d${e.dir}`;
-          if (this.anims.exists(wk) && e.sprite.anims.currentAnim?.key !== wk) e.sprite.play(wk);
-          e.trainTimer -= dt;
-          if (e.trainTimer <= 0) {
-            e.role = 'warrior';
-            e.hp = 110;
-            e.maxHp = 110;
-            const rk = `warrior_${e.tribe}_run_d${e.dir}`;
-            if (this.anims.exists(rk)) e.sprite.play(rk);
+          const dTrain = Phaser.Math.Distance.Between(e.x, e.y, trainHut.x, trainHut.y + 18);
+          if (dTrain > 22) {
+            const dx = (trainHut.x - e.x) / dTrain;
+            const dy = (trainHut.y + 18 - e.y) / dTrain;
+            e.x += dx * 38 * dt;
+            e.y += dy * 38 * dt;
+            e.dir = dir4FromVec(dx, dy);
+            const bk = `brave_${e.tribe}_run_d${e.dir}`;
+            if (this.anims.exists(bk) && e.sprite.anims.currentAnim?.key !== bk) e.sprite.play(bk);
+          } else if (!trainHut.occupant) {
+            trainHut.occupant = e;
+            trainHut.trainTimer = e.trainTimer;
+            e.insideTraining = true;
+            e.sprite.setVisible(false);
+            e.shadow.setVisible(false);
+            e.hpBg.setVisible(false);
+            e.hpFill.setVisible(false);
+          } else {
+            // Queue outside enemy Warrior Hut
+            const pk = `brave_${e.tribe}_pray_d1`;
+            if (this.anims.exists(pk) && e.sprite.anims.currentAnim?.key !== pk) e.sprite.play(pk);
           }
         }
       } else {
@@ -1775,6 +1984,29 @@ export class PlanetScene extends Phaser.Scene {
       }
     }
     return best;
+  }
+
+  private findTrainingBuildingNeedingBrave(): TrainingBuildingNode | null {
+    const p = this.state.planets[this.state.activePlanetId];
+    for (const tb of this.trainingBuildings) {
+      const cap = getRoleUnitCap(p, tb.role);
+      const current = tb.role === 'warrior' ? p.warriors : tb.role === 'preacher' ? p.preachers : p.fireWarriors;
+      const queuedOrIn = this.braves.filter(
+        (b) => (b.fsm === 'go_train' || b.fsm === 'training') && b.targetTrainBuilding === tb
+      ).length;
+      if (current + queuedOrIn < cap) return tb;
+    }
+    return null;
+  }
+
+  private findDamagedPlayerBuilding(): { x: number; y: number; hp: number; maxHp: number } | null {
+    for (const h of this.playerHuts) {
+      if (h.hp < h.maxHp) return h;
+    }
+    for (const tb of this.trainingBuildings) {
+      if (tb.hp < tb.maxHp) return tb;
+    }
+    return null;
   }
 
   private findNearestTree(x: number, y: number): TreeNode | null {
