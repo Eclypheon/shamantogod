@@ -1,0 +1,23 @@
+{
+  "name": "Shaman to God",
+  "short_name": "ShamanToGod",
+  "description": "Populous-inspired 15-planet incremental game",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0d1321",
+  "theme_color": "#1d2d44",
+  "icons": [
+    {
+      "src": "./icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "./icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
