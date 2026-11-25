@@ -37,7 +37,6 @@ export class HudController {
   private activeTab: DrawerTab = 'none';
   private titleOpen = true;
   private pantheonOpen = false;
-  private tutorialOpen = false;
   private confirmRestart = false;
   private victoryDismissed = false;
   private selectedMetaId: MetaUpgradeConfig['id'] = 'startingMana';
@@ -71,7 +70,9 @@ export class HudController {
   private elInstallBanner!: HTMLElement;
   private elTitleScreen!: HTMLElement;
   private elPantheonModal!: HTMLElement;
-  private elTutorialModal!: HTMLElement;
+  private elCoachBubble!: HTMLElement;
+  private elCoachArrow!: HTMLElement;
+  private activeCoachTarget: HTMLElement | null = null;
 
   constructor(
     root: HTMLElement,
@@ -158,7 +159,8 @@ export class HudController {
 
       <section class="title-screen open" id="hud-title"></section>
       <section class="pantheon-modal" id="hud-pantheon"></section>
-      <section class="tutorial-modal" id="hud-tutorial"></section>
+      <div class="papyrus coach-bubble" id="hud-coach-bubble"></div>
+      <div class="coach-arrow" id="hud-coach-arrow"></div>
 
       <div class="landscape-overlay" id="hud-rotate">
         <div style="font-size:38px;">&#8635;</div>
@@ -184,10 +186,11 @@ export class HudController {
     this.elInstallBanner = this.root.querySelector('#hud-install')!;
     this.elTitleScreen = this.root.querySelector('#hud-title')!;
     this.elPantheonModal = this.root.querySelector('#hud-pantheon')!;
-    this.elTutorialModal = this.root.querySelector('#hud-tutorial')!;
+    this.elCoachBubble = this.root.querySelector('#hud-coach-bubble')!;
+    this.elCoachArrow = this.root.querySelector('#hud-coach-arrow')!;
 
     // Prevent any HUD tap from leaking into Phaser canvas input
-    for (const sel of ['.top-ribbon', '.scroll-drawer', '.spell-dock', '.title-screen', '.pantheon-modal', '.tutorial-modal']) {
+    for (const sel of ['.top-ribbon', '.scroll-drawer', '.spell-dock', '.title-screen', '.pantheon-modal']) {
       this.root.querySelector(sel)?.addEventListener('pointerdown', (e) => e.stopPropagation());
     }
 
@@ -195,8 +198,13 @@ export class HudController {
       btn.addEventListener('click', () => {
         const t = btn.dataset.tab as DrawerTab;
         this.activeTab = this.activeTab === t ? 'none' : t;
+        if (t === 'tribe' && this.activeTab === 'tribe' && this.state.tutorialStep === 2) {
+          this.state.tutorialStep = 3;
+          saveGame(this.state);
+        }
         this.renderDrawer();
         this.syncTabs();
+        this.syncCoach();
       });
     });
 
@@ -204,8 +212,13 @@ export class HudController {
       this.activeTab = 'none';
       this.syncTabs();
       this.pantheonOpen = true;
+      if (this.state.tutorialStep === 5) {
+        this.state.tutorialStep = 6;
+        saveGame(this.state);
+      }
       this.updatePauseState();
       this.renderPantheon();
+      this.syncCoach();
     });
 
     this.root.querySelector('#hud-open-menu')!.addEventListener('click', () => {
@@ -219,6 +232,7 @@ export class HudController {
       const nextId = this.state.activePlanetId + 1;
       const res = prestigeToPlanet(this.state, nextId);
       if (res.ok) {
+        if (this.state.tutorialStep === 4) this.state.tutorialStep = 5;
         saveGame(this.state);
         const essMsg = res.bankedEssence > 0 ? ` (+${res.bankedEssence} Essence)` : '';
         this.showToast(`Ascended to Planet ${ROMAN[nextId - 1] ?? nextId}${essMsg}`);
@@ -270,20 +284,7 @@ export class HudController {
       this.titleOpen = false;
       this.elTitleScreen.classList.remove('open');
       this.updatePauseState();
-      if (this.state.activePlanetId === 1 && this.state.tutorialStep === 0) {
-        this.showTutorial(
-          'Step I: Convert Followers',
-          'You begin as a lone Shaman. Cast Convert around the 6 nearby Wildmen to turn them into loyal Braves. Once converted, they will automatically chop trees and build your first Hut.',
-          'Cast Convert',
-          () => {
-            this.state.tutorialStep = 1;
-            saveGame(this.state);
-            this.onBeginPlay();
-          }
-        );
-      } else {
-        this.onBeginPlay();
-      }
+      this.onBeginPlay();
       this.sync();
     });
 
@@ -317,16 +318,8 @@ export class HudController {
       this.victoryDismissed = false;
       this.elTitleScreen.classList.remove('open');
       this.updatePauseState();
-      this.showTutorial(
-        'Step I: Convert Followers',
-        'You begin as a lone Shaman. Cast Convert around the 6 nearby Wildmen to turn them into loyal Braves. Once converted, they will automatically chop trees and build your first Hut.',
-        'Cast Convert',
-        () => {
-          this.state.tutorialStep = 1;
-          saveGame(this.state);
-          this.onBeginPlay();
-        }
-      );
+      this.onBeginPlay();
+      this.showToast('New Conquest Begun');
       this.sync();
     });
 
@@ -481,7 +474,16 @@ export class HudController {
     this.elPantheonModal.querySelectorAll<HTMLButtonElement>('[data-pnode]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const id = btn.dataset.pnode as MetaUpgradeConfig['id'];
+        if (id === 'popCap' && this.state.tutorialStep === 6) {
+          this.selectedMetaId = 'popCap';
+          this.state.tutorialStep = 7;
+          saveGame(this.state);
+          this.renderPantheon();
+          this.syncCoach();
+          return;
+        }
         if (this.selectedMetaId === id && buyMetaUpgrade(this.state, id)) {
+          if (id === 'popCap' && this.state.tutorialStep === 7) this.state.tutorialStep = 8;
           saveGame(this.state);
           this.showToast(`Blessed ${META_UPGRADES.find((u) => u.id === id)?.name}!`);
           this.sync();
@@ -489,11 +491,15 @@ export class HudController {
           this.selectedMetaId = id;
         }
         this.renderPantheon();
+        this.syncCoach();
       });
     });
 
     this.elPantheonModal.querySelector('#btn-bless-selected')?.addEventListener('click', () => {
       if (buyMetaUpgrade(this.state, this.selectedMetaId)) {
+        if (this.selectedMetaId === 'popCap' && this.state.tutorialStep === 7) {
+          this.state.tutorialStep = 8;
+        }
         saveGame(this.state);
         this.showToast(`Blessed ${selected.name}!`);
         this.renderPantheon();
@@ -550,84 +556,162 @@ export class HudController {
   }
 
   private updatePauseState(): void {
-    this.onSetPaused(this.titleOpen || this.pantheonOpen || this.tutorialOpen);
+    this.onSetPaused(this.titleOpen || this.pantheonOpen);
   }
 
-  private showTutorial(title: string, body: string, btnLabel: string, onAccept: () => void): void {
-    this.tutorialOpen = true;
-    this.updatePauseState();
-    this.elTutorialModal.innerHTML = `
-      <div class="papyrus tutorial-card">
-        <h3>${title}</h3>
-        <p>${body}</p>
-        <div style="margin-top:4px;">
-          <button class="btn ascend" id="btn-tut-ok">${btnLabel}</button>
-        </div>
-      </div>
-    `;
-    this.elTutorialModal.classList.add('open');
-    this.elTutorialModal.querySelector('#btn-tut-ok')?.addEventListener('click', () => {
-      this.tutorialOpen = false;
-      this.elTutorialModal.classList.remove('open');
-      this.updatePauseState();
-      onAccept();
-    });
-  }
-
-  private checkTutorialMilestone(): void {
-    if (this.titleOpen || this.pantheonOpen || this.tutorialOpen) return;
-    const p1 = this.state.planets[1];
-
-    if (this.state.activePlanetId === 1 && this.state.tutorialStep === 1 && p1.loyalPop >= 3) {
-      this.showTutorial(
-        'Step II: Blast Spell Unlocked',
-        'You now have Blast in your bottom spell dock! Select Blast and tap enemy forces to launch them into the air. You will unlock 18 more spells as you conquer the Kaelis System.',
-        'Select Blast',
-        () => {
-          this.state.tutorialStep = 2;
-          this.state.selectedSpellId = 'blast';
-          saveGame(this.state);
-          this.syncSpells();
-        }
-      );
-    } else if (this.state.tutorialStep === 2 && p1.hutsBuilt >= 1 && p1.loyalPop >= BUILDING_FOLLOWER_REQS.warrior_hut && !p1.warriorHutOrdered) {
-      this.showTutorial(
-        'Step III: Warrior Training Hut',
-        'Your village reached 4 followers! Open Tribe in the top bar and order the Warrior Training Hut. Braves will build it and enter inside to train into strong Warriors.',
-        'Open Tribe Menu',
-        () => {
-          this.state.tutorialStep = 3;
-          saveGame(this.state);
-          this.activeTab = 'tribe';
-          this.renderDrawer();
-          this.syncTabs();
-        }
-      );
-    } else if (this.state.tutorialStep === 3 && this.state.planets[2]?.unlocked) {
-      this.showTutorial(
-        'Step IV: Ascend to Planet II',
-        'Planet I is conquered! Tap Ascend II in the top bar to Prestige to Planet II and bank your Divine Essence.',
-        'Got it',
-        () => {
-          this.state.tutorialStep = 4;
-          saveGame(this.state);
-        }
-      );
-    } else if (this.state.tutorialStep === 4 && this.state.activePlanetId >= 2) {
-      this.showTutorial(
-        'Step V: Bless Fertile Huts',
-        'You banked Divine Essence from Planet I! Open the Pantheon tree and bless Fertile Huts as your first Pantheon unlock to raise your population cap and reveal the Village branch.',
-        'Open Pantheon',
-        () => {
-          this.state.tutorialStep = 5;
-          this.selectedMetaId = 'popCap';
-          saveGame(this.state);
-          this.pantheonOpen = true;
-          this.updatePauseState();
-          this.renderPantheon();
-        }
-      );
+  private clearCoach(): void {
+    if (this.activeCoachTarget) {
+      this.activeCoachTarget.classList.remove('coach-target');
+      this.activeCoachTarget = null;
     }
+    this.elCoachBubble.classList.remove('visible');
+    this.elCoachArrow.classList.remove('visible');
+  }
+
+  private pointCoachAt(selector: string, title: string, body: string, placement: 'below' | 'above' | 'left' = 'below'): void {
+    const target = this.root.querySelector<HTMLElement>(selector);
+    if (!target || target.offsetParent === null) {
+      this.clearCoach();
+      return;
+    }
+    if (this.activeCoachTarget && this.activeCoachTarget !== target) {
+      this.activeCoachTarget.classList.remove('coach-target');
+    }
+    this.activeCoachTarget = target;
+    target.classList.add('coach-target');
+
+    const r = target.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    this.elCoachBubble.innerHTML = `<strong>${title}</strong>${body}`;
+    this.elCoachBubble.classList.add('visible');
+    this.elCoachArrow.classList.add('visible');
+
+    const bw = Math.min(270, vw - 24);
+    const left = Math.max(12, Math.min(vw - bw - 12, cx - bw / 2));
+
+    if (placement === 'above') {
+      this.elCoachArrow.textContent = '▼';
+      this.elCoachArrow.style.left = `${cx - 9}px`;
+      this.elCoachArrow.style.top = `${Math.max(8, r.top - 24)}px`;
+      this.elCoachBubble.style.left = `${left}px`;
+      this.elCoachBubble.style.top = '';
+      this.elCoachBubble.style.bottom = `${Math.max(12, vh - r.top + 28)}px`;
+    } else if (placement === 'left') {
+      this.elCoachArrow.textContent = '▶';
+      this.elCoachArrow.style.left = `${Math.max(8, r.left - 24)}px`;
+      this.elCoachArrow.style.top = `${r.top + r.height / 2 - 10}px`;
+      this.elCoachBubble.style.left = `${Math.max(12, r.left - bw - 28)}px`;
+      this.elCoachBubble.style.bottom = '';
+      this.elCoachBubble.style.top = `${Math.max(46, Math.min(vh - 96, r.top - 10))}px`;
+    } else {
+      this.elCoachArrow.textContent = '▲';
+      this.elCoachArrow.style.left = `${cx - 9}px`;
+      this.elCoachArrow.style.top = `${r.bottom + 4}px`;
+      this.elCoachBubble.style.left = `${left}px`;
+      this.elCoachBubble.style.bottom = '';
+      this.elCoachBubble.style.top = `${r.bottom + 26}px`;
+    }
+  }
+
+  /** Interactive click-through tutorial with animated arrow pointers (never auto-opens menus). */
+  private syncCoach(): void {
+    if (this.titleOpen) {
+      this.clearCoach();
+      return;
+    }
+
+    const p1 = this.state.planets[1];
+    const step = this.state.tutorialStep;
+
+    if (step === 0 && this.state.activePlanetId === 1) {
+      if (p1.loyalPop >= 1) {
+        this.state.tutorialStep = 1;
+        saveGame(this.state);
+      } else {
+        this.pointCoachAt(
+          '[data-spell="convert"]',
+          'Step I · Convert Followers',
+          'Convert is active. Tap near the 6 Wildmen so they become Braves and build your first Hut.',
+          'above'
+        );
+        return;
+      }
+    }
+
+    if (this.state.tutorialStep === 1 && this.state.activePlanetId === 1 && p1.loyalPop >= 3) {
+      this.pointCoachAt(
+        '[data-spell="blast"]',
+        'Step II · Blast Spell',
+        'Tap Blast to select it, then tap enemies to launch them. You will learn more spells on later worlds.',
+        'above'
+      );
+      return;
+    }
+
+    if (this.state.tutorialStep === 2 && this.state.activePlanetId === 1 && p1.hutsBuilt >= 1 && p1.loyalPop >= BUILDING_FOLLOWER_REQS.warrior_hut && !p1.warriorHutOrdered) {
+      this.pointCoachAt(
+        '[data-tab="tribe"]',
+        'Step III · Tribe Decrees',
+        'You reached 4 followers! Tap Tribe to open your building decrees.',
+        'below'
+      );
+      return;
+    }
+
+    if (this.state.tutorialStep === 3 && this.activeTab === 'tribe' && !p1.warriorHutOrdered) {
+      this.pointCoachAt(
+        '[data-order="warrior_hut"]',
+        'Step III · Warrior Hut',
+        'Tap Order so Braves build your Warrior Training Hut and train inside.',
+        'left'
+      );
+      return;
+    }
+
+    if (this.state.tutorialStep === 4 && this.state.planets[2]?.unlocked && this.state.activePlanetId === 1) {
+      this.pointCoachAt(
+        '#hud-ascend',
+        'Step IV · Prestige',
+        'Planet I is conquered! Tap Ascend II to travel to Planet II and bank Divine Essence.',
+        'below'
+      );
+      return;
+    }
+
+    if (this.state.tutorialStep === 5 && this.state.activePlanetId >= 2 && !this.pantheonOpen) {
+      this.pointCoachAt(
+        '#hud-open-pantheon',
+        'Step V · Open Pantheon',
+        'You banked Divine Essence! Tap Pantheon to open the upgrade tree.',
+        'below'
+      );
+      return;
+    }
+
+    if (this.state.tutorialStep === 6 && this.pantheonOpen) {
+      this.pointCoachAt(
+        '[data-pnode="popCap"]',
+        'Step V · Select Fertile Huts',
+        'Tap Fertile Huts as your first Pantheon unlock.',
+        'above'
+      );
+      return;
+    }
+
+    if (this.state.tutorialStep === 7 && this.pantheonOpen && this.selectedMetaId === 'popCap') {
+      this.pointCoachAt(
+        '#btn-bless-selected',
+        'Step V · Bless Fertile Huts',
+        'Now tap Bless to permanently raise your follower cap and unlock deeper Village nodes!',
+        'above'
+      );
+      return;
+    }
+
+    this.clearCoach();
   }
 
   showToast(msg: string): void {
@@ -683,7 +767,7 @@ export class HudController {
 
     this.syncSpells();
     this.syncTabs();
-    this.checkTutorialMilestone();
+    this.syncCoach();
   }
 
   private syncTabs(): void {
@@ -711,7 +795,12 @@ export class HudController {
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
           this.state.selectedSpellId = btn.dataset.spell!;
+          if (btn.dataset.spell === 'blast' && this.state.tutorialStep === 1) {
+            this.state.tutorialStep = 2;
+            saveGame(this.state);
+          }
           this.syncSpells();
+          this.syncCoach();
         });
       });
     }
@@ -890,6 +979,9 @@ export class HudController {
       btn.addEventListener('click', () => {
         const kind = btn.dataset.order as 'warrior_hut' | 'temple' | 'firewarrior_hut' | 'guard_tower';
         if (orderBuilding(this.state, this.state.activePlanetId, kind)) {
+          if (kind === 'warrior_hut' && this.state.tutorialStep === 3) {
+            this.state.tutorialStep = 4;
+          }
           saveGame(this.state);
           this.showToast('Blueprint ordered — Braves will construct it!');
           this.renderDrawer();

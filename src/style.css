@@ -615,45 +615,67 @@ html, body, #app, #game-container {
   color: var(--laurel);
 }
 
-.tutorial-modal {
+/* Interactive spotlight & pointing-arrow tutorial coach */
+.coach-target {
+  position: relative;
+  z-index: 55 !important;
+  box-shadow: 0 0 0 2.5px #f4c95d, 0 0 18px rgba(244, 201, 93, 0.95) !important;
+  animation: coachPulse 1.3s ease-in-out infinite;
+}
+
+@keyframes coachPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 2px #f4c95d, 0 0 12px rgba(244, 201, 93, 0.85);
+  }
+  50% {
+    box-shadow: 0 0 0 4px #ffe38f, 0 0 24px rgba(255, 227, 143, 1);
+  }
+}
+
+.coach-bubble {
   position: fixed;
-  inset: 0;
-  background: rgba(15, 10, 6, 0.62);
+  max-width: 270px;
+  padding: 9px 12px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  line-height: 1.32;
+  pointer-events: none;
+  z-index: 58;
   display: none;
-  align-items: center;
-  justify-content: center;
-  padding: var(--safe-t) var(--safe-r) var(--safe-b) var(--safe-l);
-  pointer-events: auto;
-  z-index: 46;
 }
 
-.tutorial-modal.open {
-  display: flex;
+.coach-bubble.visible {
+  display: block;
 }
 
-.tutorial-card {
-  width: min(410px, 90vw);
-  border-radius: 8px;
-  padding: 16px 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  text-align: center;
-}
-
-.tutorial-card h3 {
-  margin: 0;
+.coach-bubble strong {
   font-family: var(--font-display);
-  font-size: 14px;
-  letter-spacing: 0.06em;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  display: block;
+  margin-bottom: 2px;
   color: var(--ink);
 }
 
-.tutorial-card p {
-  margin: 0;
-  font-size: 13.5px;
-  line-height: 1.35;
-  color: var(--ink-soft);
+.coach-arrow {
+  position: fixed;
+  font-size: 20px;
+  line-height: 1;
+  color: #f4c95d;
+  text-shadow: 0 2px 4px rgba(15, 9, 4, 0.9);
+  pointer-events: none;
+  z-index: 59;
+  display: none;
+  animation: arrowBob 0.8s ease-in-out infinite;
+}
+
+.coach-arrow.visible {
+  display: block;
+}
+
+@keyframes arrowBob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
 }
 
 .install-banner {
