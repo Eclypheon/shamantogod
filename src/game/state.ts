@@ -434,6 +434,24 @@ export function hydrateState(raw: unknown): GameState {
   };
 }
 
+export function hasSavedGame(): boolean {
+  try {
+    return Boolean(localStorage.getItem(SAVE_KEY));
+  } catch {
+    return false;
+  }
+}
+
+export function resetGame(): GameState {
+  const fresh = createInitialState();
+  saveGame(fresh);
+  return fresh;
+}
+
+export function isCampaignWon(state: GameState): boolean {
+  return PLANETS.every((cfg) => state.planets[cfg.id]?.conquered);
+}
+
 export function loadGame(): GameState {
   try {
     const raw = localStorage.getItem(SAVE_KEY);

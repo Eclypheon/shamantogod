@@ -12,15 +12,22 @@ if ('serviceWorker' in navigator) {
   });
 }
 
-const state = loadGame();
+let state = loadGame();
 const offline = applyOfflineProgress(state);
 
 const hudRoot = document.getElementById('hud')!;
 let sceneRef: PlanetScene | null = null;
 
-const hud = new HudController(hudRoot, state, (jx, jy) => {
-  sceneRef?.setJoystick(jx, jy);
-});
+const hud = new HudController(
+  hudRoot,
+  state,
+  (jx, jy) => sceneRef?.setJoystick(jx, jy),
+  (freshState) => {
+    state = freshState;
+    sceneRef?.replaceState(freshState);
+  },
+  () => sceneRef?.startAmbience()
+);
 
 if (offline.manaGained >= 1) {
   hud.showToast(`Offline progress: +${Math.floor(offline.manaGained)} Mana`);

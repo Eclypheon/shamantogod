@@ -47,12 +47,26 @@ export class PlanetScene extends Phaser.Scene {
   private renderedEnemyHuts = -1;
   private renderedTowers = -1;
   private simAccum = 0;
+  private ambienceStarted = false;
 
   constructor(state: GameState, onHudSync: () => void, onToast: (msg: string) => void) {
     super('PlanetScene');
     this.state = state;
     this.onHudSync = onHudSync;
     this.onToast = onToast;
+  }
+
+  replaceState(next: GameState): void {
+    this.state = next;
+    this.currentPlanetRendered = -1;
+  }
+
+  startAmbience(): void {
+    if (this.ambienceStarted || this.state.muted) return;
+    if (this.cache.audio.exists('ambience')) {
+      this.ambienceStarted = true;
+      this.sound.play('ambience', { loop: true, volume: 0.14 });
+    }
   }
 
   setJoystick(x: number, y: number): void {
@@ -277,14 +291,48 @@ export class PlanetScene extends Phaser.Scene {
     }
   }
 
+  private spawnFloatingText(wx: number, wy: number, text: string, color = '#f4e6c4'): void {
+    const t = this.add.text(wx, wy - 20, text, {
+      fontFamily: 'Cinzel, Georgia, serif',
+      fontSize: '13px',
+      fontStyle: 'bold',
+      color,
+      stroke: '#1b1209',
+      strokeThickness: 3,
+    }).setOrigin(0.5, 1).setDepth(980);
+    this.tweens.add({
+      targets: t,
+      y: wy - 64,
+      alpha: 0,
+      duration: 900,
+      ease: 'Cubic.easeOut',
+      onComplete: () => t.destroy(),
+    });
+  }
+
   private handleCastAt(wx: number, wy: number): void {
+    this.startAmbience();
     const spell = SPELLS.find((s) => s.id === this.state.selectedSpellId);
     if (!spell) return;
     const dist = Phaser.Math.Distance.Between(this.shaman.x, this.shaman.y, wx, wy);
     const res = castSpell(this.state, spell.id, dist);
     if (!res.ok) {
       this.onToast(res.reason ?? 'Cannot cast');
+      if (res.reason?.includes('range')) {
+        this.rangeCircle.setStrokeStyle(3, 0xe63946, 0.95);
+        this.time.delayedCall(280, () => this.rangeCircle.setStrokeStyle(2, 0x4ea8de, 0.65));
+      }
       return;
+    }
+
+    if (res.converted && res.converted > 0) {
+      this.spawnFloatingText(wx, wy, `+${res.converted} Braves`, '#74c69d');
+    } else if (res.destroyed && res.destroyed > 0) {
+      this.spawnFloatingText(wx, wy, `-${res.destroyed} Enemy Hut`, '#ffb703');
+    } else if (spell.kind === 'buff') {
+      this.spawnFloatingText(wx, wy, `${spell.name} Active`, '#90e0ef');
+    } else {
+      this.spawnFloatingText(wx, wy, spell.name, '#f4e6c4');
     }
 
     if (spell.kind === 'teleport') {

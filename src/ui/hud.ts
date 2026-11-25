@@ -1,4 +1,4 @@
-import { META_UPGRADES, PLANETS, SPELLS } from '../game/data';
+import { META_UPGRADES, PLANETS, SPELLS, type MetaUpgradeConfig } from '../game/data';
 import {
   buildGuardTower,
   buyMetaUpgrade,
@@ -10,14 +10,17 @@ import {
   getPlanetManaPerSec,
   getPopCap,
   getTotalManaPerSec,
+  hasSavedGame,
+  isCampaignWon,
   isSpellUnlocked,
   rebalanceUnits,
+  resetGame,
   saveGame,
   switchPlanet,
   type GameState,
 } from '../game/state';
 
-export type DrawerTab = 'none' | 'tribe' | 'planets' | 'meta' | 'telemetry';
+export type DrawerTab = 'none' | 'tribe' | 'planets' | 'telemetry';
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -26,17 +29,34 @@ interface BeforeInstallPromptEvent extends Event {
 
 const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII', 'XIII', 'XIV', 'XV'];
 
+// Coordinates (% of parchment board) for the 6 glowing meta-progression nodes around center (50, 50)
+const NODE_POS: Record<MetaUpgradeConfig['id'], { x: number; y: number }> = {
+  startingMana: { x: 22, y: 26 },
+  manaRate: { x: 50, y: 18 },
+  castRange: { x: 78, y: 26 },
+  spellPower: { x: 78, y: 74 },
+  popCap: { x: 50, y: 82 },
+  offlineEfficiency: { x: 22, y: 74 },
+};
+
 export class HudController {
   private root: HTMLElement;
   private state: GameState;
   private activeTab: DrawerTab = 'none';
+  private titleOpen = true;
+  private pantheonOpen = false;
+  private confirmRestart = false;
+  private victoryDismissed = false;
+  private selectedMetaId: MetaUpgradeConfig['id'] = 'manaRate';
   private toastTimer = 0;
   private onJoystick: (x: number, y: number) => void;
+  private onResetState: (fresh: GameState) => void;
+  private onStartAudio: () => void;
   private deferredInstallPrompt: BeforeInstallPromptEvent | null = null;
   private installDismissed = false;
   private lastSpellSignature = '';
 
-  // Cached persistent DOM references (never torn down on tick)
+  // Persistent HUD DOM references
   private elPlanetTitle!: HTMLElement;
   private elModeBadge!: HTMLElement;
   private elDomFill!: HTMLElement;
@@ -46,17 +66,28 @@ export class HudController {
   private elEssenceVal!: HTMLElement;
   private elPopVal!: HTMLElement;
   private elRangeVal!: HTMLElement;
+  private elBuffs!: HTMLElement;
   private elAscendBtn!: HTMLButtonElement;
   private elTabBtns!: NodeListOf<HTMLButtonElement>;
   private elSpellDock!: HTMLElement;
   private elDrawer!: HTMLElement;
   private elToast!: HTMLElement;
   private elInstallBanner!: HTMLElement;
+  private elTitleScreen!: HTMLElement;
+  private elPantheonModal!: HTMLElement;
 
-  constructor(root: HTMLElement, state: GameState, onJoystick: (x: number, y: number) => void) {
+  constructor(
+    root: HTMLElement,
+    state: GameState,
+    onJoystick: (x: number, y: number) => void,
+    onResetState: (fresh: GameState) => void,
+    onStartAudio: () => void
+  ) {
     this.root = root;
     this.state = state;
     this.onJoystick = onJoystick;
+    this.onResetState = onResetState;
+    this.onStartAudio = onStartAudio;
 
     this.mountShell();
 
@@ -64,13 +95,16 @@ export class HudController {
       e.preventDefault();
       this.deferredInstallPrompt = e as BeforeInstallPromptEvent;
       this.syncInstallBanner();
+      if (this.titleOpen) this.renderTitleScreen();
     });
     window.addEventListener('appinstalled', () => {
       this.deferredInstallPrompt = null;
       this.installDismissed = true;
       this.syncInstallBanner();
+      if (this.titleOpen) this.renderTitleScreen();
     });
 
+    this.renderTitleScreen();
     this.sync();
   }
 
@@ -93,6 +127,7 @@ export class HudController {
           <span class="mode-badge" id="hud-mode"></span>
           <div class="dom-track" title="Dominance"><div class="dom-fill" id="hud-dom-fill"></div></div>
           <span class="metric"><strong id="hud-dom">0%</strong></span>
+          <span id="hud-buffs" style="display:flex;gap:4px;"></span>
         </div>
         <div class="ribbon-center">
           <span class="metric">Mana <strong id="hud-mana">0</strong><span class="sub" id="hud-rate">(+0/s)</span></span>
@@ -106,9 +141,10 @@ export class HudController {
         <div class="ribbon-right">
           <button class="btn" data-tab="tribe">Tribe</button>
           <button class="btn" data-tab="planets">Worlds</button>
-          <button class="btn" data-tab="meta">Meta</button>
+          <button class="btn" id="hud-open-pantheon">Pantheon</button>
           <button class="btn" data-tab="telemetry">Stats</button>
           <button class="btn ascend" id="hud-ascend" style="display:none;">Ascend</button>
+          <button class="btn" id="hud-open-menu">Menu</button>
         </div>
       </header>
 
@@ -122,6 +158,9 @@ export class HudController {
       </div>
 
       <nav class="papyrus spell-dock" id="hud-spells"></nav>
+
+      <section class="title-screen open" id="hud-title"></section>
+      <section class="pantheon-modal" id="hud-pantheon"></section>
 
       <div class="landscape-overlay" id="hud-rotate">
         <div style="font-size:38px;">&#8635;</div>
@@ -140,12 +179,15 @@ export class HudController {
     this.elEssenceVal = this.root.querySelector('#hud-essence')!;
     this.elPopVal = this.root.querySelector('#hud-pop')!;
     this.elRangeVal = this.root.querySelector('#hud-range')!;
+    this.elBuffs = this.root.querySelector('#hud-buffs')!;
     this.elAscendBtn = this.root.querySelector('#hud-ascend')!;
     this.elTabBtns = this.root.querySelectorAll('[data-tab]');
     this.elSpellDock = this.root.querySelector('#hud-spells')!;
     this.elDrawer = this.root.querySelector('#hud-drawer')!;
     this.elToast = this.root.querySelector('#hud-toast')!;
     this.elInstallBanner = this.root.querySelector('#hud-install')!;
+    this.elTitleScreen = this.root.querySelector('#hud-title')!;
+    this.elPantheonModal = this.root.querySelector('#hud-pantheon')!;
 
     this.elTabBtns.forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -154,6 +196,19 @@ export class HudController {
         this.renderDrawer();
         this.syncTabs();
       });
+    });
+
+    this.root.querySelector('#hud-open-pantheon')!.addEventListener('click', () => {
+      this.activeTab = 'none';
+      this.syncTabs();
+      this.pantheonOpen = true;
+      this.renderPantheon();
+    });
+
+    this.root.querySelector('#hud-open-menu')!.addEventListener('click', () => {
+      this.confirmRestart = false;
+      this.titleOpen = true;
+      this.renderTitleScreen();
     });
 
     this.elAscendBtn.addEventListener('click', () => {
@@ -173,6 +228,169 @@ export class HudController {
 
     this.bindJoystick();
     this.syncInstallBanner();
+  }
+
+  private renderTitleScreen(): void {
+    this.elTitleScreen.classList.toggle('open', this.titleOpen);
+    if (!this.titleOpen) return;
+
+    const saved = hasSavedGame();
+    const conquered = PLANETS.filter((pl) => this.state.planets[pl.id].conquered).length;
+    const activeCfg = getPlanetConfig(this.state.activePlanetId);
+    const won = isCampaignWon(this.state);
+
+    this.elTitleScreen.innerHTML = `
+      <div class="title-plaque">
+        <div class="title-sub">Chronicles of the Kaelis System</div>
+        <h1>SHAMAN TO GOD</h1>
+        <div class="title-summary">
+          ${won ? 'Pantheon Victory: All 15 Worlds Conquered!' : `Planet ${ROMAN[activeCfg.id - 1] ?? activeCfg.id} · ${conquered}/15 Conquered · ${Math.floor(this.state.divineEssence)} Divine Essence`}
+        </div>
+        <div class="title-actions">
+          <button class="btn ascend" id="btn-start-game">${saved ? 'Continue Conquest' : 'Begin Conquest'}</button>
+          <button class="btn" id="btn-title-pantheon">Pantheon Tree</button>
+          ${
+            this.confirmRestart
+              ? `<button class="btn danger" id="btn-confirm-restart">Confirm Restart</button>
+                 <button class="btn" id="btn-cancel-restart">Cancel</button>`
+              : `<button class="btn danger" id="btn-restart-game">Restart Game</button>`
+          }
+          ${this.deferredInstallPrompt ? `<button class="btn" id="btn-title-install">Install PWA</button>` : ''}
+        </div>
+        <div style="font-size:12px;color:var(--ink-soft);margin-top:4px;">
+          Move with WASD or Bronze Compass · Tap world to cast spells · Conquer all 15 planets (&gt;95% Dominance)
+        </div>
+      </div>
+    `;
+
+    this.elTitleScreen.querySelector('#btn-start-game')?.addEventListener('click', () => {
+      this.titleOpen = false;
+      this.elTitleScreen.classList.remove('open');
+      this.onStartAudio();
+      this.sync();
+    });
+
+    this.elTitleScreen.querySelector('#btn-title-pantheon')?.addEventListener('click', () => {
+      this.pantheonOpen = true;
+      this.renderPantheon();
+    });
+
+    this.elTitleScreen.querySelector('#btn-restart-game')?.addEventListener('click', () => {
+      this.confirmRestart = true;
+      this.renderTitleScreen();
+    });
+
+    this.elTitleScreen.querySelector('#btn-cancel-restart')?.addEventListener('click', () => {
+      this.confirmRestart = false;
+      this.renderTitleScreen();
+    });
+
+    this.elTitleScreen.querySelector('#btn-confirm-restart')?.addEventListener('click', () => {
+      const fresh = resetGame();
+      this.state = fresh;
+      this.onResetState(fresh);
+      this.confirmRestart = false;
+      this.titleOpen = false;
+      this.victoryDismissed = false;
+      this.elTitleScreen.classList.remove('open');
+      this.onStartAudio();
+      this.showToast('New Conquest Begun');
+      this.sync();
+    });
+
+    this.elTitleScreen.querySelector('#btn-title-install')?.addEventListener('click', async () => {
+      if (!this.deferredInstallPrompt) return;
+      await this.deferredInstallPrompt.prompt();
+      this.deferredInstallPrompt = null;
+      this.renderTitleScreen();
+    });
+  }
+
+  private renderPantheon(): void {
+    this.elPantheonModal.classList.toggle('open', this.pantheonOpen);
+    if (!this.pantheonOpen) return;
+
+    const conquered = PLANETS.filter((pl) => this.state.planets[pl.id].conquered).length;
+    const selected = META_UPGRADES.find((u) => u.id === this.selectedMetaId) ?? META_UPGRADES[0];
+    const selLvl = this.state.metaLevels[selected.id];
+    const selCost = getMetaUpgradeCost(selected, selLvl);
+    const selMaxed = selLvl >= selected.maxLevel;
+
+    const linesSvg = META_UPGRADES.map((u) => {
+      const pos = NODE_POS[u.id];
+      const leveled = this.state.metaLevels[u.id] > 0;
+      return `<line x1="50%" y1="50%" x2="${pos.x}%" y2="${pos.y}%" stroke="${leveled ? '#b87c1e' : 'rgba(140,98,41,0.4)'}" stroke-width="${leveled ? '3' : '1.8'}" stroke-dasharray="${leveled ? '' : '4 4'}" />`;
+    }).join('');
+
+    const nodesHtml = META_UPGRADES.map((u) => {
+      const pos = NODE_POS[u.id];
+      const lvl = this.state.metaLevels[u.id];
+      const cost = getMetaUpgradeCost(u, lvl);
+      const maxed = lvl >= u.maxLevel;
+      const affordable = !maxed && this.state.divineEssence >= cost;
+      const cls = `p-node ${lvl > 0 ? 'leveled' : ''} ${affordable ? 'affordable' : ''}`;
+      return `<button class="${cls}" style="left:${pos.x}%;top:${pos.y}%;" data-pnode="${u.id}">
+        <span class="pn-name">${u.name}</span>
+        <span class="pn-lvl">Lv ${lvl}/${u.maxLevel}</span>
+        <span class="pn-cost">${maxed ? 'MAX' : `${cost} Ess`}</span>
+      </button>`;
+    }).join('');
+
+    this.elPantheonModal.innerHTML = `
+      <div class="parchment-board">
+        <div class="pantheon-header">
+          <h2>PANTHEON OF KAELIS</h2>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span class="metric">Divine Essence: <strong>${Math.floor(this.state.divineEssence)}</strong></span>
+            <button class="btn" id="btn-close-pantheon">Close</button>
+          </div>
+        </div>
+        <div class="pantheon-canvas">
+          <svg class="pantheon-lines">${linesSvg}</svg>
+          <div class="p-node center-node" style="left:50%;top:50%;">
+            <span class="pn-name">SHAMAN'S SPARK</span>
+            <span class="pn-lvl">${conquered}/15 Worlds</span>
+          </div>
+          ${nodesHtml}
+        </div>
+        <div class="pantheon-footer">
+          <div>
+            <strong>${selected.name}</strong> (Lv ${selLvl}/${selected.maxLevel}): ${selected.description}
+          </div>
+          <button class="btn ascend" id="btn-bless-selected" ${selMaxed || this.state.divineEssence < selCost ? 'disabled' : ''}>
+            ${selMaxed ? 'Maxed' : `Bless (${selCost} Essence)`}
+          </button>
+        </div>
+      </div>
+    `;
+
+    this.elPantheonModal.querySelector('#btn-close-pantheon')?.addEventListener('click', () => {
+      this.pantheonOpen = false;
+      this.elPantheonModal.classList.remove('open');
+    });
+
+    this.elPantheonModal.querySelectorAll<HTMLButtonElement>('[data-pnode]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const id = btn.dataset.pnode as MetaUpgradeConfig['id'];
+        if (this.selectedMetaId === id && buyMetaUpgrade(this.state, id)) {
+          saveGame(this.state);
+          this.showToast(`Blessed ${META_UPGRADES.find((u) => u.id === id)?.name}!`);
+          this.sync();
+        } else {
+          this.selectedMetaId = id;
+        }
+        this.renderPantheon();
+      });
+    });
+
+    this.elPantheonModal.querySelector('#btn-bless-selected')?.addEventListener('click', () => {
+      if (buyMetaUpgrade(this.state, this.selectedMetaId)) {
+        saveGame(this.state);
+        this.showToast(`Blessed ${selected.name}!`);
+        this.renderPantheon();
+        this.sync();
+      }
+    });
   }
 
   private bindJoystick(): void {
@@ -199,6 +417,7 @@ export class HudController {
     zone.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
       e.preventDefault();
+      this.onStartAudio();
       activePointerId = e.pointerId;
       zone.setPointerCapture(e.pointerId);
       updateFromClient(e.clientX, e.clientY);
@@ -252,6 +471,13 @@ export class HudController {
     this.elPopVal.textContent = `${p.loyalPop}/${popCap}`;
     this.elRangeVal.textContent = Number.isFinite(range) ? `${Math.round(range)}` : 'Global';
 
+    // Active buffs
+    const activeBuffHtml = Object.entries(this.state.activeBuffs)
+      .filter(([, sec]) => sec > 0.2)
+      .map(([id, sec]) => `<span class="buff-pill">${id.slice(0, 5)} ${Math.ceil(sec)}s</span>`)
+      .join('');
+    this.elBuffs.innerHTML = activeBuffHtml;
+
     if (nextPlanet && nextPlanet.unlocked) {
       this.elAscendBtn.style.display = 'inline-block';
       this.elAscendBtn.textContent = `Ascend ${ROMAN[nextPlanet.planetId - 1] ?? nextPlanet.planetId}`;
@@ -259,10 +485,15 @@ export class HudController {
       this.elAscendBtn.style.display = 'none';
     }
 
+    if (isCampaignWon(this.state) && !this.victoryDismissed && !this.titleOpen) {
+      this.victoryDismissed = true;
+      this.titleOpen = true;
+      this.renderTitleScreen();
+    }
+
     this.syncSpells();
     this.syncTabs();
 
-    // Update live telemetry tab only when open (has no interactive sliders)
     if (this.activeTab === 'telemetry') {
       this.renderDrawer();
     }
@@ -406,20 +637,6 @@ export class HudController {
           </button>
         </div>`;
       }).join('')}</div>`;
-    } else if (this.activeTab === 'meta') {
-      title = `Pantheon Meta (${Math.floor(this.state.divineEssence)} Essence)`;
-      body = META_UPGRADES.map((u) => {
-        const lvl = this.state.metaLevels[u.id];
-        const cost = getMetaUpgradeCost(u, lvl);
-        const maxed = lvl >= u.maxLevel;
-        return `<div class="scroll-card">
-          <strong>${u.name}</strong> (Lv ${lvl}/${u.maxLevel})<br/>
-          <small>${u.description}</small><br/>
-          <button class="btn" style="margin-top:4px;" ${maxed || this.state.divineEssence < cost ? 'disabled' : ''} data-meta="${u.id}">
-            ${maxed ? 'Maxed' : `Bless (${cost} Essence)`}
-          </button>
-        </div>`;
-      }).join('');
     } else if (this.activeTab === 'telemetry') {
       title = 'Oracle Telemetry';
       body = `
@@ -465,17 +682,6 @@ export class HudController {
         if (switchPlanet(this.state, id)) {
           saveGame(this.state);
           this.activeTab = 'none';
-          this.sync();
-        }
-      });
-    });
-
-    this.elDrawer.querySelectorAll<HTMLButtonElement>('[data-meta]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const id = btn.dataset.meta as (typeof META_UPGRADES)[number]['id'];
-        if (buyMetaUpgrade(this.state, id)) {
-          saveGame(this.state);
-          this.renderDrawer();
           this.sync();
         }
       });
