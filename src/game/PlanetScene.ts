@@ -19,6 +19,7 @@ import {
   onBraveTrained,
   onBuildingConstructed,
   onEnemyConvertedByPreacher,
+  onPlayerUnitDied,
   onShamanDied,
   onWildmanConverted,
   type BuildingBlueprintKind,
@@ -103,9 +104,12 @@ interface WildmanActor {
 
 interface BraveActor {
   sprite: Phaser.GameObjects.Sprite;
+  hpBg: Phaser.GameObjects.Rectangle;
+  hpFill: Phaser.GameObjects.Rectangle;
   x: number;
   y: number;
   hp: number;
+  maxHp: number;
   dir: number; // 1..8
   fsm: BraveState;
   targetTree: TreeNode | null;
@@ -122,9 +126,12 @@ interface BraveActor {
 interface SpecialistActor {
   kind: 'warrior' | 'preacher' | 'firewarrior';
   sprite: Phaser.GameObjects.Sprite;
+  hpBg: Phaser.GameObjects.Rectangle;
+  hpFill: Phaser.GameObjects.Rectangle;
   x: number;
   y: number;
   hp: number;
+  maxHp: number;
   dir: number;
   attackTimer: number;
   convertProgress: number;
@@ -432,9 +439,17 @@ export class PlanetScene extends Phaser.Scene {
       w.barFill.destroy();
     }
     this.wildmen = [];
-    for (const b of this.braves) b.sprite.destroy();
+    for (const b of this.braves) {
+      b.sprite.destroy();
+      b.hpBg.destroy();
+      b.hpFill.destroy();
+    }
     this.braves = [];
-    for (const s of this.specialists) s.sprite.destroy();
+    for (const s of this.specialists) {
+      s.sprite.destroy();
+      s.hpBg.destroy();
+      s.hpFill.destroy();
+    }
     this.specialists = [];
     for (const e of this.enemies) {
       e.sprite.destroy();
@@ -670,6 +685,8 @@ export class PlanetScene extends Phaser.Scene {
         const idx = this.specialists.findIndex((s) => s.kind === kind);
         if (idx >= 0) {
           this.specialists[idx].sprite.destroy();
+          this.specialists[idx].hpBg.destroy();
+          this.specialists[idx].hpFill.destroy();
           this.specialists.splice(idx, 1);
         }
         diff++;
@@ -742,11 +759,16 @@ export class PlanetScene extends Phaser.Scene {
   private spawnBrave(x: number, y: number): void {
     const sp = this.add.sprite(x, y, 'units', 'brave_blue_run_d1_00').setOrigin(0.5, 1).setScale(1.0).setDepth(y);
     if (this.anims.exists('brave_blue_pray_d1')) sp.play('brave_blue_pray_d1');
+    const hpBg = this.add.rectangle(x, y - 42, 22, 3, 0x1a120a, 0.85).setVisible(false).setDepth(925);
+    const hpFill = this.add.rectangle(x - 10, y - 42, 20, 2, 0x52b788, 1).setOrigin(0, 0.5).setVisible(false).setDepth(926);
     this.braves.push({
       sprite: sp,
+      hpBg,
+      hpFill,
       x,
       y,
       hp: 35,
+      maxHp: 35,
       dir: 1,
       fsm: 'patrol',
       targetTree: null,
@@ -784,13 +806,20 @@ export class PlanetScene extends Phaser.Scene {
       }
     }
 
-    const warriorHp = Math.round(140 * getWarriorPowerMult(this.state));
+    const sx = towerIdx >= 0 ? this.towers[towerIdx].x : x;
+    const sy = towerIdx >= 0 ? this.towers[towerIdx].y - 26 : y;
+    const maxHp = kind === 'warrior' ? Math.round(140 * getWarriorPowerMult(this.state)) : 55;
+    const hpBg = this.add.rectangle(sx, sy - 44, 24, 3, 0x1a120a, 0.85).setVisible(false).setDepth(925);
+    const hpFill = this.add.rectangle(sx - 11, sy - 44, 22, 2, 0x52b788, 1).setOrigin(0, 0.5).setVisible(false).setDepth(926);
     this.specialists.push({
       kind,
       sprite: sp,
-      x: towerIdx >= 0 ? this.towers[towerIdx].x : x,
-      y: towerIdx >= 0 ? this.towers[towerIdx].y - 26 : y,
-      hp: kind === 'warrior' ? warriorHp : 55,
+      hpBg,
+      hpFill,
+      x: sx,
+      y: sy,
+      hp: maxHp,
+      maxHp,
       dir: 1,
       attackTimer: 0,
       convertProgress: 0,
@@ -798,6 +827,30 @@ export class PlanetScene extends Phaser.Scene {
       patrolX: x,
       patrolY: y,
     });
+  }
+
+  private killPlayerBrave(b: BraveActor): void {
+    const idx = this.braves.indexOf(b);
+    if (idx < 0) return;
+    if (b.targetHut && b.fsm === 'breeding') b.targetHut.occupants = Math.max(0, b.targetHut.occupants - 1);
+    if (b.targetTrainBuilding && b.targetTrainBuilding.occupant === b) b.targetTrainBuilding.occupant = null;
+    b.sprite.destroy();
+    b.hpBg.destroy();
+    b.hpFill.destroy();
+    this.braves.splice(idx, 1);
+    onPlayerUnitDied(this.state, 'brave');
+    this.onHudSync();
+  }
+
+  private killPlayerSpecialist(s: SpecialistActor): void {
+    const idx = this.specialists.indexOf(s);
+    if (idx < 0) return;
+    s.sprite.destroy();
+    s.hpBg.destroy();
+    s.hpFill.destroy();
+    this.specialists.splice(idx, 1);
+    onPlayerUnitDied(this.state, s.kind);
+    this.onHudSync();
   }
 
   private spawnEnemy(
@@ -1230,6 +1283,8 @@ export class PlanetScene extends Phaser.Scene {
           const idx = this.braves.indexOf(b);
           if (idx >= 0) this.braves.splice(idx, 1);
           b.sprite.destroy();
+          b.hpBg.destroy();
+          b.hpFill.destroy();
           if (onBraveTrained(this.state, tb.role)) {
             this.spawnSpecialist(tb.role, tb.x, tb.y + 18);
             this.playSfx('birth', 0.35);
@@ -1250,15 +1305,18 @@ export class PlanetScene extends Phaser.Scene {
       if (b.fsm === 'breeding' || b.fsm === 'training') continue;
 
       if (b.fsm === 'patrol') {
-        // 1) Physical training: if a training building needs more specialists (below 30% cap), walk there & queue!
-        const neededTb = this.findTrainingBuildingNeedingBrave();
-        if (neededTb) {
-          b.targetTrainBuilding = neededTb;
-          b.fsm = 'go_train';
-          continue;
+        // Priority 1: Breed in an open Hut whenever >= 1 Hut exists and pop < cap!
+        if (p.hutsBuilt >= 1 && this.braves.length >= 2 && p.loyalPop < popCap) {
+          const openHut = this.playerHuts.find((h) => h.occupants < 2);
+          const breedingBraves = this.braves.filter((x) => x.fsm === 'enter_hut' || x.fsm === 'breeding').length;
+          if (openHut && breedingBraves < 2) {
+            b.targetHut = openHut;
+            b.fsm = 'enter_hut';
+            continue;
+          }
         }
 
-        // 2) Building repair: if any player building is damaged and a live tree exists, chop wood & repair it!
+        // Priority 2: Build active blueprint OR repair damaged player building
         const damagedBuilding = this.findDamagedPlayerBuilding();
         if (damagedBuilding) {
           const tree = this.findNearestTree(b.x, b.y);
@@ -1269,19 +1327,6 @@ export class PlanetScene extends Phaser.Scene {
             continue;
           }
         }
-
-        // 3) If >= 3 huts exist and pop < cap, send a pair of Braves into an open hut to breed
-        if (p.hutsBuilt >= 3 && p.loyalPop < popCap) {
-          const openHut = this.playerHuts.find((h) => h.occupants < 2);
-          const breedingBraves = this.braves.filter((x) => x.fsm === 'enter_hut' || x.fsm === 'breeding').length;
-          if (openHut && breedingBraves < 2) {
-            b.targetHut = openHut;
-            b.fsm = 'enter_hut';
-            continue;
-          }
-        }
-
-        // 4) If there is an active blueprint AND a live tree, go chop wood
         if (this.buildSite) {
           const tree = this.findNearestTree(b.x, b.y);
           if (tree) {
@@ -1291,7 +1336,15 @@ export class PlanetScene extends Phaser.Scene {
           }
         }
 
-        // 5) If no wood to chop and an enemy is nearby, fight!
+        // Priority 3: Physical training inside a built Training Building (or queue outside)
+        const neededTb = this.findTrainingBuildingNeedingBrave();
+        if (neededTb) {
+          b.targetTrainBuilding = neededTb;
+          b.fsm = 'go_train';
+          continue;
+        }
+
+        // Priority 4: Defend buildings / fight nearby enemies, otherwise idle & wander
         const nearbyEnemy = this.findNearestEnemy(b.x, b.y, 160);
         if (nearbyEnemy) {
           b.targetEnemy = nearbyEnemy;
@@ -1299,7 +1352,6 @@ export class PlanetScene extends Phaser.Scene {
           continue;
         }
 
-        // 6) Otherwise walk calmly & pause
         const d = Phaser.Math.Distance.Between(b.x, b.y, b.patrolX, b.patrolY);
         if (d > 6) {
           const dx = (b.patrolX - b.x) / d;
@@ -1357,6 +1409,8 @@ export class PlanetScene extends Phaser.Scene {
             h.occupants += 1;
             b.fsm = 'breeding';
             b.sprite.setVisible(false);
+            b.hpBg.setVisible(false);
+            b.hpFill.setVisible(false);
           } else {
             const dx = (h.x - b.x) / d;
             const dy = (h.y + 8 - b.y) / d;
@@ -1517,6 +1571,9 @@ export class PlanetScene extends Phaser.Scene {
       }
 
       b.sprite.setPosition(b.x, b.y).setDepth(b.y);
+      const showBraveHp = b.sprite.visible && b.hp < b.maxHp;
+      b.hpBg.setVisible(showBraveHp).setPosition(b.x, b.y - 42);
+      b.hpFill.setVisible(showBraveHp).setPosition(b.x - 10, b.y - 42).setSize(20 * Math.max(0, b.hp / b.maxHp), 2);
     }
   }
 
@@ -1689,6 +1746,9 @@ export class PlanetScene extends Phaser.Scene {
       }
 
       s.sprite.setPosition(s.x, s.y).setDepth(s.garrisonedTowerIdx >= 0 ? s.y + 40 : s.y);
+      const showSpecHp = s.hp < s.maxHp;
+      s.hpBg.setVisible(showSpecHp).setPosition(s.x, s.y - 44);
+      s.hpFill.setVisible(showSpecHp).setPosition(s.x - 11, s.y - 44).setSize(22 * Math.max(0, s.hp / s.maxHp), 2);
     }
   }
 
@@ -1820,20 +1880,10 @@ export class PlanetScene extends Phaser.Scene {
                 this.damagePlayerShaman(11);
               } else if (nearWarrior) {
                 nearWarrior.hp -= 11;
-                if (nearWarrior.hp <= 0) {
-                  applyCombatResult(this.state, 0, 0, 1);
-                  this.syncUnitActors();
-                }
+                if (nearWarrior.hp <= 0) this.killPlayerSpecialist(nearWarrior);
               } else if (nearBrave) {
                 nearBrave.hp -= 11;
-                if (nearBrave.hp <= 0) {
-                  const bIdx = this.braves.indexOf(nearBrave);
-                  if (bIdx >= 0) {
-                    nearBrave.sprite.destroy();
-                    this.braves.splice(bIdx, 1);
-                  }
-                  applyCombatResult(this.state, 0, 0, 1);
-                }
+                if (nearBrave.hp <= 0) this.killPlayerBrave(nearBrave);
               } else if (nearHut) {
                 nearHut.hp = Math.max(10, nearHut.hp - 10);
               }
@@ -1913,20 +1963,10 @@ export class PlanetScene extends Phaser.Scene {
               this.damagePlayerShaman(18);
             } else if (nearSpec) {
               nearSpec.hp -= 18;
-              if (nearSpec.hp <= 0) {
-                applyCombatResult(this.state, 0, 0, 1);
-                this.syncUnitActors();
-              }
+              if (nearSpec.hp <= 0) this.killPlayerSpecialist(nearSpec);
             } else if (nearBrave) {
               nearBrave.hp -= 18;
-              if (nearBrave.hp <= 0) {
-                const bIdx = this.braves.indexOf(nearBrave);
-                if (bIdx >= 0) {
-                  nearBrave.sprite.destroy();
-                  this.braves.splice(bIdx, 1);
-                }
-                applyCombatResult(this.state, 0, 0, 1);
-              }
+              if (nearBrave.hp <= 0) this.killPlayerBrave(nearBrave);
             }
           }
         }

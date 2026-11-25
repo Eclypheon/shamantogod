@@ -577,9 +577,8 @@ export class HudController {
   private checkTutorialMilestone(): void {
     if (this.titleOpen || this.pantheonOpen || this.tutorialOpen) return;
     const p1 = this.state.planets[1];
-    if (this.state.activePlanetId !== 1) return;
 
-    if (this.state.tutorialStep === 1 && p1.loyalPop >= 3) {
+    if (this.state.activePlanetId === 1 && this.state.tutorialStep === 1 && p1.loyalPop >= 3) {
       this.showTutorial(
         'Step II: Blast Spell Unlocked',
         'You now have Blast in your bottom spell dock! Select Blast and tap enemy forces to launch them into the air. You will unlock 18 more spells as you conquer the Kaelis System.',
@@ -606,12 +605,26 @@ export class HudController {
       );
     } else if (this.state.tutorialStep === 3 && this.state.planets[2]?.unlocked) {
       this.showTutorial(
-        'Step IV: Ascend & Pantheon',
-        'Planet I is conquered! Tap Ascend II in the top bar to Prestige to Planet II, bank your Divine Essence, and unlock Temples (Preachers), Fire Warriors, and Guardhouses in the Pantheon.',
+        'Step IV: Ascend to Planet II',
+        'Planet I is conquered! Tap Ascend II in the top bar to Prestige to Planet II and bank your Divine Essence.',
         'Got it',
         () => {
           this.state.tutorialStep = 4;
           saveGame(this.state);
+        }
+      );
+    } else if (this.state.tutorialStep === 4 && this.state.activePlanetId >= 2) {
+      this.showTutorial(
+        'Step V: Bless Fertile Huts',
+        'You banked Divine Essence from Planet I! Open the Pantheon tree and bless Fertile Huts as your first Pantheon unlock to raise your population cap and reveal the Village branch.',
+        'Open Pantheon',
+        () => {
+          this.state.tutorialStep = 5;
+          this.selectedMetaId = 'popCap';
+          saveGame(this.state);
+          this.pantheonOpen = true;
+          this.updatePauseState();
+          this.renderPantheon();
         }
       );
     }

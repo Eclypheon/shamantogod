@@ -371,6 +371,21 @@ export function onBuildingConstructed(state: GameState, kind: BuildingBlueprintK
   updateDominanceAndUnlocks(state, p);
 }
 
+export function onPlayerUnitDied(
+  state: GameState,
+  role: 'brave' | 'warrior' | 'preacher' | 'firewarrior'
+): void {
+  const p = state.planets[state.activePlanetId];
+  if (p.loyalPop <= 0) return;
+  p.loyalPop = Math.max(0, p.loyalPop - 1);
+  if (role === 'warrior' && p.warriors > 0) p.warriors -= 1;
+  else if (role === 'preacher' && p.preachers > 0) p.preachers -= 1;
+  else if (role === 'firewarrior' && p.fireWarriors > 0) p.fireWarriors -= 1;
+  else if (p.braves > 0) p.braves -= 1;
+  rebalanceUnits(p);
+  updateDominanceAndUnlocks(state, p);
+}
+
 export function applyCombatResult(
   state: GameState,
   enemyUnitKills: number,

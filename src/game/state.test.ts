@@ -15,6 +15,7 @@ import {
   isMetaNodeVisible,
   onBraveTrained,
   onBuildingConstructed,
+  onPlayerUnitDied,
   onShamanDied,
   onWildmanConverted,
   orderBuilding,
@@ -60,6 +61,10 @@ describe('Shaman to God simulation', () => {
     expect(onBraveTrained(state, 'warrior')).toBe(true);
     expect(state.planets[1].warriors).toBe(1);
     expect(state.planets[1].braves).toBe(6);
+
+    onPlayerUnitDied(state, 'warrior');
+    expect(state.planets[1].warriors).toBe(0);
+    expect(state.planets[1].loyalPop).toBe(6);
 
     // Guardhouse requires Pantheon unlock + Fire Warrior Hut + 14 followers
     expect(orderBuilding(state, 1, 'guard_tower')).toBe(false);
