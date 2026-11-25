@@ -659,14 +659,13 @@ html, body, #app, #game-container {
 
 .coach-arrow {
   position: fixed;
-  font-size: 20px;
-  line-height: 1;
-  color: #f4c95d;
-  text-shadow: 0 2px 4px rgba(15, 9, 4, 0.9);
+  width: 30px;
+  height: 30px;
   pointer-events: none;
   z-index: 59;
   display: none;
-  animation: arrowBob 0.8s ease-in-out infinite;
+  filter: drop-shadow(0 2px 3px rgba(18, 10, 4, 0.75));
+  animation: arrowBob 0.85s ease-in-out infinite;
 }
 
 .coach-arrow.visible {

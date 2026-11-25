@@ -286,7 +286,8 @@ export class PlanetScene extends Phaser.Scene {
   triggerOpeningConvert(): void {
     if (!this.shaman) return;
     const p = this.state.planets[this.state.activePlanetId];
-    if (p.planetId === 1 && p.loyalPop === 0 && p.hutsBuilt === 0) {
+    // Disabled on World 1 so the player casts their first Convert manually during the tutorial; active on Worlds 2+
+    if (p.planetId >= 2 && p.loyalPop === 0 && p.hutsBuilt === 0) {
       this.shaman.setPosition(WORLD_W / 2, WORLD_H / 2);
       this.spawnConvertCircle(this.shaman.x, this.shaman.y);
       this.castAnimTimer = 0.8;
@@ -604,6 +605,11 @@ export class PlanetScene extends Phaser.Scene {
         this.spawnEnemy(tribe, cx + Phaser.Math.Between(-65, 65), cy + Phaser.Math.Between(-50, 50), i === 0 ? 'warrior' : 'brave', cx + 36, cy - 10);
       }
     });
+
+    // Auto-cast opening Convert on Worlds 2+ when arriving with 0 followers
+    if (cfg.id >= 2 && p.loyalPop === 0 && p.hutsBuilt === 0) {
+      this.triggerOpeningConvert();
+    }
   }
 
   private getHutSlotPos(idx: number): { x: number; y: number } {

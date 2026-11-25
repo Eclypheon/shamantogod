@@ -37,6 +37,7 @@ export class HudController {
   private activeTab: DrawerTab = 'none';
   private titleOpen = true;
   private pantheonOpen = false;
+  private coachActive = false;
   private confirmRestart = false;
   private victoryDismissed = false;
   private selectedMetaId: MetaUpgradeConfig['id'] = 'startingMana';
@@ -556,7 +557,7 @@ export class HudController {
   }
 
   private updatePauseState(): void {
-    this.onSetPaused(this.titleOpen || this.pantheonOpen);
+    this.onSetPaused(this.titleOpen || this.pantheonOpen || this.coachActive);
   }
 
   private clearCoach(): void {
@@ -566,6 +567,19 @@ export class HudController {
     }
     this.elCoachBubble.classList.remove('visible');
     this.elCoachArrow.classList.remove('visible');
+    if (this.coachActive) {
+      this.coachActive = false;
+      this.updatePauseState();
+    }
+  }
+
+  private buildDrawnArrowSvg(dir: 'down' | 'up' | 'right'): string {
+    const rot = dir === 'down' ? 0 : dir === 'up' ? 180 : -90;
+    return `<svg viewBox="0 0 36 36" width="30" height="30" style="transform:rotate(${rot}deg);display:block;">
+      <path d="M18 4 C17 11 17 17 18 24 M11 19 C14 23 16 27 18 32 C20 27 22 23 25 19" fill="none" stroke="#27180c" stroke-width="5.2" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M18 4 C17 11 17 17 18 24 M11 19 C14 23 16 27 18 32 C20 27 22 23 25 19" fill="none" stroke="#e9c46a" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M14 5 L18 9 L22 5" fill="none" stroke="#c89b4b" stroke-width="2" stroke-linecap="round"/>
+    </svg>`;
   }
 
   private pointCoachAt(selector: string, title: string, body: string, placement: 'below' | 'above' | 'left' = 'below'): void {
@@ -579,6 +593,10 @@ export class HudController {
     }
     this.activeCoachTarget = target;
     target.classList.add('coach-target');
+    if (!this.coachActive) {
+      this.coachActive = true;
+      this.updatePauseState();
+    }
 
     const r = target.getBoundingClientRect();
     const cx = r.left + r.width / 2;
@@ -593,26 +611,26 @@ export class HudController {
     const left = Math.max(12, Math.min(vw - bw - 12, cx - bw / 2));
 
     if (placement === 'above') {
-      this.elCoachArrow.textContent = '▼';
-      this.elCoachArrow.style.left = `${cx - 9}px`;
-      this.elCoachArrow.style.top = `${Math.max(8, r.top - 24)}px`;
+      this.elCoachArrow.innerHTML = this.buildDrawnArrowSvg('down');
+      this.elCoachArrow.style.left = `${cx - 15}px`;
+      this.elCoachArrow.style.top = `${Math.max(8, r.top - 32)}px`;
       this.elCoachBubble.style.left = `${left}px`;
       this.elCoachBubble.style.top = '';
-      this.elCoachBubble.style.bottom = `${Math.max(12, vh - r.top + 28)}px`;
+      this.elCoachBubble.style.bottom = `${Math.max(12, vh - r.top + 34)}px`;
     } else if (placement === 'left') {
-      this.elCoachArrow.textContent = '▶';
-      this.elCoachArrow.style.left = `${Math.max(8, r.left - 24)}px`;
-      this.elCoachArrow.style.top = `${r.top + r.height / 2 - 10}px`;
-      this.elCoachBubble.style.left = `${Math.max(12, r.left - bw - 28)}px`;
+      this.elCoachArrow.innerHTML = this.buildDrawnArrowSvg('right');
+      this.elCoachArrow.style.left = `${Math.max(8, r.left - 32)}px`;
+      this.elCoachArrow.style.top = `${r.top + r.height / 2 - 15}px`;
+      this.elCoachBubble.style.left = `${Math.max(12, r.left - bw - 34)}px`;
       this.elCoachBubble.style.bottom = '';
       this.elCoachBubble.style.top = `${Math.max(46, Math.min(vh - 96, r.top - 10))}px`;
     } else {
-      this.elCoachArrow.textContent = '▲';
-      this.elCoachArrow.style.left = `${cx - 9}px`;
-      this.elCoachArrow.style.top = `${r.bottom + 4}px`;
+      this.elCoachArrow.innerHTML = this.buildDrawnArrowSvg('up');
+      this.elCoachArrow.style.left = `${cx - 15}px`;
+      this.elCoachArrow.style.top = `${r.bottom + 2}px`;
       this.elCoachBubble.style.left = `${left}px`;
       this.elCoachBubble.style.bottom = '';
-      this.elCoachBubble.style.top = `${r.bottom + 26}px`;
+      this.elCoachBubble.style.top = `${r.bottom + 34}px`;
     }
   }
 
@@ -795,7 +813,10 @@ export class HudController {
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
           this.state.selectedSpellId = btn.dataset.spell!;
-          if (btn.dataset.spell === 'blast' && this.state.tutorialStep === 1) {
+          if (btn.dataset.spell === 'convert' && this.state.tutorialStep === 0) {
+            this.state.tutorialStep = 1;
+            saveGame(this.state);
+          } else if (btn.dataset.spell === 'blast' && this.state.tutorialStep === 1) {
             this.state.tutorialStep = 2;
             saveGame(this.state);
           }
