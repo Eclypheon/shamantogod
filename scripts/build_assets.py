@@ -131,9 +131,9 @@ def build_unit_atlas(zf: zipfile.ZipFile):
             add_clip(f"RedBrave/BraWork{d}.gif", f"brave_{tribe}_work_d{d}", tribe)
             add_clip(f"RedBrave/BraPunch{d}.gif", f"brave_{tribe}_punch_d{d}", tribe)
             add_clip(f"RedBrave/BraPray{d}.gif", f"brave_{tribe}_pray_d{d}", tribe)
-        for d in [1, 3, 5, 7]:
             add_clip(f"RedWarrior/warrun{d}.gif", f"warrior_{tribe}_run_d{d}", tribe)
             add_clip(f"RedWarrior/warpunch{d}.gif", f"warrior_{tribe}_punch_d{d}", tribe)
+        for d in [1, 3, 5, 7]:
             add_clip(f"BlueSpy/SpyRun{d}.gif", f"spy_{tribe}_run_d{d}", tribe, source_blue=True)
 
     # Single-direction Preachers, Fire Warriors, Wildmen
@@ -186,27 +186,73 @@ def draw_iso_hut(tribe_rgb: tuple[int, int, int], level: int, kind: str = "hut")
         return img
 
     if kind == "tower":
-        d.polygon([(36, 62), (22, 55), (36, 48), (50, 55)], fill=stone_dark)
-        d.rectangle([26, 22, 46, 55], fill=stone, outline=stone_dark)
-        d.rectangle([30, 30, 42, 40], fill=mural)
-        d.polygon([(36, 8), (22, 24), (50, 24)], fill=thatch, outline=thatch_dark)
+        # Populous Guard Tower: tall slender painted stalk flaring into wide observation pod & conical roof
+        d.ellipse([26, 60, 46, 68], fill=(30, 22, 14, 130))
+        d.polygon([(31, 64), (33, 34), (39, 34), (41, 64)], fill=plaster, outline=plaster_sh)
+        d.rectangle([33, 40, 39, 58], fill=mural)
+        d.rectangle([31, 56, 35, 64], fill=door)
+        # Wide lookout pod
+        d.ellipse([20, 22, 52, 37], fill=plaster, outline=plaster_sh)
+        d.ellipse([24, 26, 34, 33], fill=mural, outline=door)
+        d.ellipse([38, 26, 48, 33], fill=mural, outline=door)
+        # Wide conical woven roof + tribe cap + smoke
+        d.polygon([(36, 9), (16, 26), (56, 26)], fill=thatch, outline=thatch_dark)
+        d.polygon([(36, 9), (30, 15), (42, 15)], fill=mural)
+        d.ellipse([34, 2, 38, 8], fill=(235, 235, 230, 160))
         return img
 
     if kind == "temple":
-        d.polygon([(36, 64), (10, 51), (36, 38), (62, 51)], fill=stone_dark)
-        d.rectangle([18, 30, 54, 52], fill=plaster, outline=stone_dark)
-        d.rectangle([28, 34, 44, 48], fill=mural)
-        d.polygon([(36, 12), (14, 32), (58, 32)], fill=thatch, outline=thatch_dark)
-        d.rectangle([34, 5, 38, 14], fill=(240, 210, 90, 255))
+        # Populous Temple: wide circular domed roof with tribe crown, open struts, brazier fire, entry tunnel
+        d.ellipse([8, 42, 64, 66], fill=(42, 30, 18, 130))
+        d.ellipse([12, 34, 60, 62], fill=plaster, outline=plaster_sh)
+        # Circular tribe mural + glowing fire brazier inside open gallery
+        d.ellipse([24, 42, 38, 56], fill=mural, outline=plaster_sh)
+        d.ellipse([43, 40, 55, 52], fill=(40, 26, 14, 255))
+        d.polygon([(49, 36), (45, 48), (53, 48)], fill=(255, 160, 30, 255))
+        d.polygon([(49, 40), (47, 48), (51, 48)], fill=(255, 235, 120, 255))
+        # Protruding entry tunnel on bottom-left
+        d.polygon([(12, 52), (24, 46), (28, 58), (16, 64)], fill=plaster_sh, outline=thatch_dark)
+        d.rectangle([15, 55, 21, 63], fill=door)
+        # Massive domed woven roof + tribe crown cap
+        d.ellipse([9, 14, 63, 40], fill=thatch, outline=thatch_dark)
+        d.ellipse([16, 17, 56, 34], fill=thatch_hi)
+        d.ellipse([27, 15, 45, 25], fill=mural, outline=thatch_dark)
         return img
 
-    if kind in ("warrior_hut", "firewarrior_hut"):
-        d.polygon([(36, 64), (12, 52), (36, 40), (60, 52)], fill=fence)
-        d.rectangle([18, 32, 54, 53], fill=plaster, outline=thatch_dark)
-        d.rectangle([21, 36, 31, 49], fill=mural)
-        roof_c = thatch if kind == "warrior_hut" else (188, 86, 34, 255)
-        d.polygon([(36, 14), (14, 34), (58, 34)], fill=roof_c, outline=thatch_dark)
-        d.rectangle([33, 41, 41, 53], fill=door)
+    if kind == "warrior_hut":
+        # Populous Warrior Training Hut: U-shaped fortress yard, shields on fence, tall right turret
+        d.polygon([(36, 66), (6, 51), (36, 36), (66, 51)], fill=(78, 58, 36, 130), outline=fence)
+        # Left curved wall + tribe banner + round wooden shields on front palisade
+        d.rectangle([10, 38, 38, 55], fill=plaster, outline=plaster_sh)
+        d.polygon([(8, 38), (22, 28), (42, 38)], fill=thatch, outline=thatch_dark)
+        d.rectangle([12, 42, 20, 54], fill=mural)
+        d.ellipse([22, 48, 28, 56], fill=(150, 42, 28, 255), outline=fence_hi)
+        d.ellipse([30, 52, 36, 60], fill=(150, 42, 28, 255), outline=fence_hi)
+        d.rectangle([24, 38, 31, 49], fill=door)
+        # Tall conical turret on right with tribe spire tip
+        d.rectangle([42, 24, 58, 54], fill=plaster, outline=plaster_sh)
+        d.ellipse([46, 30, 52, 38], fill=door)
+        d.polygon([(50, 8), (38, 26), (62, 26)], fill=thatch, outline=thatch_dark)
+        d.polygon([(50, 8), (46, 14), (54, 14)], fill=mural)
+        return img
+
+    if kind == "firewarrior_hut":
+        # Populous Fire Warrior Hut: central canopy shrine, two blazing brazier pillars, twin corner turrets
+        d.polygon([(36, 66), (6, 51), (36, 36), (66, 51)], fill=(60, 44, 30, 130), outline=fence)
+        # Twin side mini-turrets
+        for tx in (14, 58):
+            d.rectangle([tx - 5, 38, tx + 5, 54], fill=plaster, outline=plaster_sh)
+            d.polygon([(tx, 28), (tx - 8, 39), (tx + 8, 39)], fill=thatch, outline=thatch_dark)
+        # Central tall shrine + flat-angled canopy + tribe emblem
+        d.rectangle([25, 22, 47, 50], fill=plaster, outline=plaster_sh)
+        d.rectangle([29, 25, 43, 39], fill=mural)
+        d.rectangle([32, 40, 40, 50], fill=door)
+        d.polygon([(36, 12), (20, 22), (52, 22)], fill=thatch_hi, outline=thatch_dark)
+        # Two blazing fire braziers flanking entrance
+        for bx in (24, 48):
+            d.rectangle([bx - 3, 46, bx + 3, 60], fill=fence, outline=thatch_dark)
+            d.polygon([(bx, 34), (bx - 5, 46), (bx + 5, 46)], fill=(255, 130, 20, 255))
+            d.polygon([(bx, 38), (bx - 3, 46), (bx + 3, 46)], fill=(255, 235, 110, 255))
         return img
 
     # Populous Hut Lv 1-3: fenced yard + cream plaster body + tribe mural + brown shingle roof

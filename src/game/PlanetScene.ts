@@ -6,11 +6,17 @@ import {
   getCastRangePx,
   getPlanetConfig,
   getPopCap,
+  getPreacherSpeedMult,
+  getShamanMaxHp,
   getSpellPowerMult,
   getTimberSpeedMult,
+  getTowerRangePx,
+  getTreeRegrowSec,
+  getWarriorPowerMult,
   onBraveBred,
   onBuildingConstructed,
   onEnemyConvertedByPreacher,
+  onShamanDied,
   onWildmanConverted,
   type BuildingBlueprintKind,
   type GameState,
@@ -52,6 +58,10 @@ interface PlayerHutNode {
   x: number;
   y: number;
   sprite: Phaser.GameObjects.Sprite;
+  hp: number;
+  maxHp: number;
+  hpBg: Phaser.GameObjects.Rectangle;
+  hpFill: Phaser.GameObjects.Rectangle;
   occupants: number;
   breedTimer: number;
   barBg: Phaser.GameObjects.Rectangle;
@@ -124,9 +134,12 @@ interface EnemyActor {
 
 interface EnemyHutNode {
   sprite: Phaser.GameObjects.Sprite;
+  hpBg: Phaser.GameObjects.Rectangle;
+  hpFill: Phaser.GameObjects.Rectangle;
   x: number;
   y: number;
   hp: number;
+  maxHp: number;
   tribe: 'red' | 'green' | 'yellow';
 }
 
@@ -134,9 +147,17 @@ interface RivalShamanActor {
   sprite: Phaser.GameObjects.Sprite;
   ring: Phaser.GameObjects.Arc;
   label: Phaser.GameObjects.Text;
+  hpBg: Phaser.GameObjects.Rectangle;
+  hpFill: Phaser.GameObjects.Rectangle;
   tribe: 'red' | 'green' | 'yellow';
+  homeX: number;
+  homeY: number;
   x: number;
   y: number;
+  hp: number;
+  maxHp: number;
+  respawnTimer: number;
+  attackTimer: number;
   targetX: number;
   targetY: number;
   waitTimer: number;
@@ -172,6 +193,13 @@ export class PlanetScene extends Phaser.Scene {
 
   private shaman!: Phaser.GameObjects.Sprite;
   private shamanLabel!: Phaser.GameObjects.Text;
+  private shamanHpBg!: Phaser.GameObjects.Rectangle;
+  private shamanHpFill!: Phaser.GameObjects.Rectangle;
+  private shamanHp = 180;
+  private shamanRespawnTimer = 0;
+  private shamanAttackTimer = 0;
+  private respawnCircle!: Phaser.GameObjects.Arc;
+  private respawnText!: Phaser.GameObjects.Text;
   private rangeCircle!: Phaser.GameObjects.Arc;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd!: Record<'W' | 'A' | 'S' | 'D', Phaser.Input.Keyboard.Key>;
@@ -262,6 +290,19 @@ export class PlanetScene extends Phaser.Scene {
       padding: { x: 4, y: 1 },
     }).setOrigin(0.5, 1).setDepth(950);
 
+    this.shamanHp = getShamanMaxHp(this.state);
+    this.shamanHpBg = this.add.rectangle(this.shaman.x, this.shaman.y - 52, 34, 4, 0x1a120a, 0.85).setVisible(false).setDepth(952);
+    this.shamanHpFill = this.add.rectangle(this.shaman.x - 16, this.shaman.y - 52, 32, 2, 0x52b788, 1).setOrigin(0, 0.5).setVisible(false).setDepth(953);
+    this.respawnCircle = this.add.circle(WORLD_W / 2, WORLD_H / 2, 42, 0xf4c95d, 0.16).setStrokeStyle(2.5, 0xf4c95d, 0.95).setVisible(false).setDepth(15);
+    this.respawnText = this.add.text(WORLD_W / 2, WORLD_H / 2 - 54, '', {
+      fontFamily: 'Cinzel, Georgia, serif',
+      fontSize: '12px',
+      fontStyle: 'bold',
+      color: '#f4c95d',
+      stroke: '#1b1209',
+      strokeThickness: 3,
+    }).setOrigin(0.5, 1).setVisible(false).setDepth(960);
+
     this.rangeCircle = this.add.circle(this.shaman.x, this.shaman.y, 185, 0x4ea8de, 0.06);
     this.rangeCircle.setStrokeStyle(1.5, 0xc89b4b, 0.55).setDepth(5);
 
@@ -316,6 +357,8 @@ export class PlanetScene extends Phaser.Scene {
     this.trees = [];
     for (const h of this.playerHuts) {
       h.sprite.destroy();
+      h.hpBg.destroy();
+      h.hpFill.destroy();
       h.barBg.destroy();
       h.barFill.destroy();
     }
@@ -324,7 +367,11 @@ export class PlanetScene extends Phaser.Scene {
     this.towers = [];
     for (const tb of this.trainingBuildings) tb.destroy();
     this.trainingBuildings = [];
-    for (const eh of this.enemyHuts) eh.sprite.destroy();
+    for (const eh of this.enemyHuts) {
+      eh.sprite.destroy();
+      eh.hpBg.destroy();
+      eh.hpFill.destroy();
+    }
     this.enemyHuts = [];
     if (this.buildSite) {
       this.buildSite.sprite.destroy();
@@ -353,6 +400,8 @@ export class PlanetScene extends Phaser.Scene {
       rs.sprite.destroy();
       rs.ring.destroy();
       rs.label.destroy();
+      rs.hpBg.destroy();
+      rs.hpFill.destroy();
     }
     this.rivalShamans = [];
     for (const cc of this.convertCircles) {
@@ -409,7 +458,7 @@ export class PlanetScene extends Phaser.Scene {
 
     this.syncBuiltStructures();
 
-    // Rival huts
+    // Rival huts with HP bars when damaged
     const enemyHutCount = Math.min(10, p.enemyHutsRemaining);
     for (let i = 0; i < enemyHutCount; i++) {
       const tribe = cfg.rivals[i % cfg.rivals.length];
@@ -417,10 +466,12 @@ export class PlanetScene extends Phaser.Scene {
       const bx = WORLD_W / 2 + Math.cos(angle) * 440;
       const by = WORLD_H / 2 + Math.sin(angle) * 240;
       const sp = this.add.sprite(bx, by, 'world', `hut_2_${tribe}`).setOrigin(0.5, 0.92).setDepth(by);
-      this.enemyHuts.push({ sprite: sp, x: bx, y: by, hp: 40, tribe });
+      const hpBg = this.add.rectangle(bx, by - 58, 36, 5, 0x1a120a, 0.85).setVisible(false).setDepth(928);
+      const hpFill = this.add.rectangle(bx - 17, by - 58, 34, 3, 0xe63946, 1).setOrigin(0, 0.5).setVisible(false).setDepth(929);
+      this.enemyHuts.push({ sprite: sp, hpBg, hpFill, x: bx, y: by, hp: 120, maxHp: 120, tribe });
     }
 
-    // 1 Rival Shaman per rival tribe (becomes Ally when allied on Planet 5+)
+    // 1 Rival Shaman per rival tribe (can fight, die, and reincarnate!)
     cfg.rivals.forEach((tribe, idx) => {
       const isAlly = p.allied && cfg.allianceTribe === tribe;
       const angle = idx === 0 ? 0 : idx === 1 ? Math.PI : Math.PI / 2;
@@ -438,13 +489,23 @@ export class PlanetScene extends Phaser.Scene {
         backgroundColor: 'rgba(20,14,8,0.75)',
         padding: { x: 4, y: 1 },
       }).setOrigin(0.5, 1).setDepth(950);
+      const hpBg = this.add.rectangle(sx, sy - 50, 34, 4, 0x1a120a, 0.85).setVisible(false).setDepth(951);
+      const hpFill = this.add.rectangle(sx - 16, sy - 50, 32, 2, 0xe63946, 1).setOrigin(0, 0.5).setVisible(false).setDepth(952);
       this.rivalShamans.push({
         sprite: sp,
         ring,
         label,
+        hpBg,
+        hpFill,
         tribe,
+        homeX: sx,
+        homeY: sy,
         x: sx,
         y: sy,
+        hp: 180,
+        maxHp: 180,
+        respawnTimer: 0,
+        attackTimer: 0,
         targetX: sx,
         targetY: sy,
         waitTimer: 1.5,
@@ -490,9 +551,11 @@ export class PlanetScene extends Phaser.Scene {
       const pos = this.getHutSlotPos(idx);
       const lv = Math.min(3, 1 + Math.floor(idx / 3));
       const sp = this.add.sprite(pos.x, pos.y, 'world', `hut_${lv}_blue`).setOrigin(0.5, 0.92).setDepth(pos.y);
+      const hpBg = this.add.rectangle(pos.x, pos.y - 60, 36, 5, 0x1a120a, 0.85).setVisible(false).setDepth(928);
+      const hpFill = this.add.rectangle(pos.x - 17, pos.y - 60, 34, 3, 0x52b788, 1).setOrigin(0, 0.5).setVisible(false).setDepth(929);
       const barBg = this.add.rectangle(pos.x, pos.y - 52, 30, 4, 0x1a120a, 0.85).setVisible(false).setDepth(920);
       const barFill = this.add.rectangle(pos.x - 14, pos.y - 52, 0, 2, 0xf4c95d, 1).setOrigin(0, 0.5).setVisible(false).setDepth(921);
-      this.playerHuts.push({ x: pos.x, y: pos.y, sprite: sp, occupants: 0, breedTimer: 0, barBg, barFill });
+      this.playerHuts.push({ x: pos.x, y: pos.y, sprite: sp, hp: 120, maxHp: 120, hpBg, hpFill, occupants: 0, breedTimer: 0, barBg, barFill });
     }
 
     // Re-sync training buildings & guard towers
@@ -622,7 +685,7 @@ export class PlanetScene extends Phaser.Scene {
       sprite: sp,
       x,
       y,
-      hp: 25,
+      hp: 35,
       dir: 1,
       fsm: 'patrol',
       targetTree: null,
@@ -647,7 +710,6 @@ export class PlanetScene extends Phaser.Scene {
     const sp = this.add.sprite(x, y, 'units').setOrigin(0.5, 1).setScale(1.05).setDepth(y);
     if (this.anims.exists(initAnim)) sp.play(initAnim);
 
-    // Assign Fire Warriors to unoccupied Guard Towers if available
     let towerIdx = -1;
     if (kind === 'firewarrior' && this.towers.length > 0) {
       const taken = new Set(this.specialists.filter((s) => s.garrisonedTowerIdx >= 0).map((s) => s.garrisonedTowerIdx));
@@ -659,12 +721,13 @@ export class PlanetScene extends Phaser.Scene {
       }
     }
 
+    const warriorHp = Math.round(140 * getWarriorPowerMult(this.state));
     this.specialists.push({
       kind,
       sprite: sp,
       x: towerIdx >= 0 ? this.towers[towerIdx].x : x,
       y: towerIdx >= 0 ? this.towers[towerIdx].y - 26 : y,
-      hp: kind === 'warrior' ? 55 : 35,
+      hp: kind === 'warrior' ? warriorHp : 55,
       dir: 1,
       attackTimer: 0,
       convertProgress: 0,
@@ -688,11 +751,11 @@ export class PlanetScene extends Phaser.Scene {
       tribe,
       x,
       y,
-      hp: 30,
-      maxHp: 30,
+      hp: 110,
+      maxHp: 110,
       targetX: x,
       targetY: y,
-      waitTimer: Phaser.Math.FloatBetween(0.6, 2.0),
+      waitTimer: Phaser.Math.FloatBetween(0.8, 2.4),
       attackTimer: 0,
       dir: 1,
       airZ: 0,
@@ -762,12 +825,16 @@ export class PlanetScene extends Phaser.Scene {
     }
 
     let hutHits = 0;
+    const siegeMult = 1 + this.state.metaLevels.cataclysmMastery * 0.25;
     for (let i = this.enemyHuts.length - 1; i >= 0; i--) {
       const eh = this.enemyHuts[i];
       if (Phaser.Math.Distance.Between(bx, by, eh.x, eh.y) <= radius) {
-        eh.hp -= 25 * getSpellPowerMult(this.state);
+        eh.hp -= 30 * getSpellPowerMult(this.state) * siegeMult;
+        this.updateEnemyHutBar(eh);
         if (eh.hp <= 0) {
           eh.sprite.destroy();
+          eh.hpBg.destroy();
+          eh.hpFill.destroy();
           this.enemyHuts.splice(i, 1);
           hutHits += 1;
           this.spawnFloatingText(eh.x, eh.y, '-1 Enemy Hut', '#ffb703');
@@ -799,7 +866,35 @@ export class PlanetScene extends Phaser.Scene {
     });
   }
 
+  private updateEnemyHutBar(eh: EnemyHutNode): void {
+    const damaged = eh.hp < eh.maxHp && eh.hp > 0;
+    eh.hpBg.setVisible(damaged);
+    eh.hpFill.setVisible(damaged).setSize(34 * Math.max(0, eh.hp / eh.maxHp), 3);
+  }
+
+  private damagePlayerShaman(dmg: number): void {
+    if (this.shamanRespawnTimer > 0 || (this.state.activeBuffs.shield ?? 0) > 0) return;
+    this.shamanHp = Math.max(0, this.shamanHp - dmg);
+    if (this.shamanHp <= 0) {
+      const res = onShamanDied(this.state);
+      this.shamanRespawnTimer = res.respawnSec;
+      this.shaman.setVisible(false);
+      this.shamanLabel.setVisible(false);
+      this.shamanHpBg.setVisible(false);
+      this.shamanHpFill.setVisible(false);
+      this.rangeCircle.setVisible(false);
+      this.respawnCircle.setPosition(WORLD_W / 2, WORLD_H / 2).setVisible(true);
+      this.respawnText.setPosition(WORLD_W / 2, WORLD_H / 2 - 54).setVisible(true);
+      this.onToast(`Shaman slain! -${res.manaLost} Mana · Reincarnating...`);
+      this.onHudSync();
+    }
+  }
+
   private handleCastAt(wx: number, wy: number): void {
+    if (this.shamanRespawnTimer > 0) {
+      this.onToast(`Reincarnating (${Math.ceil(this.shamanRespawnTimer)}s)...`);
+      return;
+    }
     const spell = SPELLS.find((s) => s.id === this.state.selectedSpellId);
     if (!spell) return;
     const dist = Phaser.Math.Distance.Between(this.shaman.x, this.shaman.y, wx, wy);
@@ -936,13 +1031,17 @@ export class PlanetScene extends Phaser.Scene {
       }
     }
 
-    // Hut breeding timers (pair of Braves inside a Hut breeds a new Brave!)
+    // Hut breeding timers (3x slower: 20s per pair inside a Hut)
     for (const h of this.playerHuts) {
+      const hutDamaged = h.hp < h.maxHp && h.hp > 0;
+      h.hpBg.setVisible(hutDamaged);
+      h.hpFill.setVisible(hutDamaged).setSize(34 * Math.max(0, h.hp / h.maxHp), 3);
+
       if (h.occupants >= 2 && p.loyalPop < popCap) {
         h.breedTimer += dt;
         h.barBg.setVisible(true);
-        h.barFill.setVisible(true).setSize(Math.min(28, (h.breedTimer / 6.5) * 28), 2);
-        if (h.breedTimer >= 6.5) {
+        h.barFill.setVisible(true).setSize(Math.min(28, (h.breedTimer / 20.0) * 28), 2);
+        if (h.breedTimer >= 20.0) {
           h.breedTimer = 0;
           h.barBg.setVisible(false);
           h.barFill.setVisible(false);
@@ -1070,7 +1169,7 @@ export class PlanetScene extends Phaser.Scene {
         if (b.timer <= 0) {
           if (b.targetTree && !b.targetTree.chopped) {
             b.targetTree.chopped = true;
-            b.targetTree.regrowTimer = 75; // Slow regrowth
+            b.targetTree.regrowTimer = getTreeRegrowSec(this.state);
             b.targetTree.sprite.setFrame('tree_stump');
           }
           b.carryingWood = true;
@@ -1147,16 +1246,16 @@ export class PlanetScene extends Phaser.Scene {
             this.playBraveAnim(b, 'punch');
             b.timer -= dt;
             if (b.timer <= 0) {
-              b.timer = 0.8;
-              e.hp -= 6;
-              this.playSfx('punch', 0.22);
+              b.timer = 1.15;
+              e.hp -= 4;
+              this.playSfx('punch', 0.2);
               if (e.hp <= 0) this.killEnemy(e);
             }
           } else {
             const dx = (e.x - b.x) / d;
             const dy = (e.y - b.y) / d;
-            b.x += dx * 60 * dt;
-            b.y += dy * 60 * dt;
+            b.x += dx * 44 * dt;
+            b.y += dy * 44 * dt;
             b.dir = dir8FromVec(dx, dy);
             this.playBraveAnim(b, 'run');
           }
@@ -1167,50 +1266,78 @@ export class PlanetScene extends Phaser.Scene {
     }
   }
 
-  /** Strict role behaviors: Warriors ONLY fight, Preachers ONLY convert enemies, Fire Warriors shoot fireballs / man Guard Towers. */
+  /** Strict role behaviors: Warriors ONLY fight (8-dir, idle when no target), Preachers ONLY convert enemies, Fire Warriors shoot fireballs / man Guard Towers. */
   private updateSpecialists(dt: number): void {
     const bloodlustMult = (this.state.activeBuffs.bloodlust ?? 0) > 0 ? 1.8 : 1;
+    const warriorAtk = Math.round(14 * getWarriorPowerMult(this.state));
+    const preacherSpeed = getPreacherSpeedMult(this.state);
+    const towerRange = getTowerRangePx(this.state);
+    const fireDmg = Math.round(18 * (1 + this.state.metaLevels.godfireApex * 0.2));
+    const siegeMult = 1 + this.state.metaLevels.cataclysmMastery * 0.25;
 
     for (const s of this.specialists) {
       s.attackTimer = Math.max(0, s.attackTimer - dt * bloodlustMult);
 
       if (s.kind === 'warrior') {
-        // Warriors ONLY fight: chase nearest enemy unit or enemy hut
         const enemy = this.findNearestEnemy(s.x, s.y, 900);
+        const rivalShaman = !enemy ? this.findNearestHostileShaman(s.x, s.y, 900) : null;
         if (enemy) {
           const d = Phaser.Math.Distance.Between(s.x, s.y, enemy.x, enemy.y);
-          if (d <= 26) {
-            s.dir = dir4FromVec(enemy.x - s.x, enemy.y - s.y);
+          if (d <= 28) {
+            s.dir = dir8FromVec(enemy.x - s.x, enemy.y - s.y);
             const pk = `warrior_blue_punch_d${s.dir}`;
             if (this.anims.exists(pk) && s.sprite.anims.currentAnim?.key !== pk) s.sprite.play(pk);
             if (s.attackTimer <= 0) {
-              s.attackTimer = 0.65;
-              enemy.hp -= 12;
-              this.playSfx('punch', 0.25);
+              s.attackTimer = 1.05;
+              enemy.hp -= warriorAtk;
+              this.playSfx('punch', 0.22);
               if (enemy.hp <= 0) this.killEnemy(enemy);
             }
           } else {
             const dx = (enemy.x - s.x) / d;
             const dy = (enemy.y - s.y) / d;
-            s.x += dx * 68 * dt;
-            s.y += dy * 68 * dt;
-            s.dir = dir4FromVec(dx, dy);
+            s.x += dx * 48 * dt;
+            s.y += dy * 48 * dt;
+            s.dir = dir8FromVec(dx, dy);
+            const rk = `warrior_blue_run_d${s.dir}`;
+            if (this.anims.exists(rk) && s.sprite.anims.currentAnim?.key !== rk) s.sprite.play(rk);
+          }
+        } else if (rivalShaman) {
+          const d = Phaser.Math.Distance.Between(s.x, s.y, rivalShaman.x, rivalShaman.y);
+          if (d <= 30) {
+            s.dir = dir8FromVec(rivalShaman.x - s.x, rivalShaman.y - s.y);
+            const pk = `warrior_blue_punch_d${s.dir}`;
+            if (this.anims.exists(pk) && s.sprite.anims.currentAnim?.key !== pk) s.sprite.play(pk);
+            if (s.attackTimer <= 0) {
+              s.attackTimer = 1.05;
+              this.damageRivalShaman(rivalShaman, warriorAtk);
+              this.playSfx('punch', 0.22);
+            }
+          } else {
+            const dx = (rivalShaman.x - s.x) / d;
+            const dy = (rivalShaman.y - s.y) / d;
+            s.x += dx * 48 * dt;
+            s.y += dy * 48 * dt;
+            s.dir = dir8FromVec(dx, dy);
             const rk = `warrior_blue_run_d${s.dir}`;
             if (this.anims.exists(rk) && s.sprite.anims.currentAnim?.key !== rk) s.sprite.play(rk);
           }
         } else if (this.enemyHuts.length > 0) {
           const eh = this.enemyHuts[0];
           const d = Phaser.Math.Distance.Between(s.x, s.y, eh.x, eh.y);
-          if (d <= 34) {
-            s.dir = dir4FromVec(eh.x - s.x, eh.y - s.y);
+          if (d <= 38) {
+            s.dir = dir8FromVec(eh.x - s.x, eh.y - s.y);
             const pk = `warrior_blue_punch_d${s.dir}`;
             if (this.anims.exists(pk) && s.sprite.anims.currentAnim?.key !== pk) s.sprite.play(pk);
             if (s.attackTimer <= 0) {
-              s.attackTimer = 0.8;
-              eh.hp -= 10;
+              s.attackTimer = 1.1;
+              eh.hp -= Math.round(14 * siegeMult);
+              this.updateEnemyHutBar(eh);
               this.playSfx('punch', 0.22);
               if (eh.hp <= 0) {
                 eh.sprite.destroy();
+                eh.hpBg.destroy();
+                eh.hpFill.destroy();
                 this.enemyHuts.shift();
                 applyCombatResult(this.state, 0, 1, 0);
                 this.spawnFloatingText(eh.x, eh.y, '-1 Enemy Hut', '#ffb703');
@@ -1220,21 +1347,42 @@ export class PlanetScene extends Phaser.Scene {
           } else {
             const dx = (eh.x - s.x) / d;
             const dy = (eh.y - s.y) / d;
-            s.x += dx * 64 * dt;
-            s.y += dy * 64 * dt;
-            s.dir = dir4FromVec(dx, dy);
+            s.x += dx * 46 * dt;
+            s.y += dy * 46 * dt;
+            s.dir = dir8FromVec(dx, dy);
             const rk = `warrior_blue_run_d${s.dir}`;
             if (this.anims.exists(rk) && s.sprite.anims.currentAnim?.key !== rk) s.sprite.play(rk);
           }
+        } else {
+          // No targets left: patrol calmly and stand idle (NEVER slash at thin air!)
+          const d = Phaser.Math.Distance.Between(s.x, s.y, s.patrolX, s.patrolY);
+          if (d > 8) {
+            const dx = (s.patrolX - s.x) / d;
+            const dy = (s.patrolY - s.y) / d;
+            s.x += dx * 36 * dt;
+            s.y += dy * 36 * dt;
+            s.dir = dir8FromVec(dx, dy);
+            const rk = `warrior_blue_run_d${s.dir}`;
+            if (this.anims.exists(rk) && s.sprite.anims.currentAnim?.key !== rk) s.sprite.play(rk);
+          } else {
+            const idleFrame = `warrior_blue_run_d${s.dir}_00`;
+            if (this.textures.get('units').has(idleFrame)) {
+              s.sprite.anims.stop();
+              s.sprite.setFrame(idleFrame);
+            }
+            if (Math.random() < 0.25 * dt) {
+              s.patrolX = WORLD_W / 2 + Phaser.Math.Between(-130, 130);
+              s.patrolY = WORLD_H / 2 + Phaser.Math.Between(-90, 90);
+            }
+          }
         }
       } else if (s.kind === 'preacher') {
-        // Preachers ONLY convert enemy followers
         const enemy = this.findNearestEnemy(s.x, s.y, 900);
         if (enemy) {
           const d = Phaser.Math.Distance.Between(s.x, s.y, enemy.x, enemy.y);
           if (d <= 82) {
-            s.convertProgress += dt;
-            if (s.convertProgress >= 2.8) {
+            s.convertProgress += dt * preacherSpeed;
+            if (s.convertProgress >= 3.8) {
               s.convertProgress = 0;
               const ex = enemy.x;
               const ey = enemy.y;
@@ -1252,35 +1400,38 @@ export class PlanetScene extends Phaser.Scene {
           } else {
             const dx = (enemy.x - s.x) / d;
             const dy = (enemy.y - s.y) / d;
-            s.x += dx * 52 * dt;
-            s.y += dy * 52 * dt;
+            s.x += dx * 40 * dt;
+            s.y += dy * 40 * dt;
             s.sprite.setFlipX(dx < 0);
           }
         }
       } else if (s.kind === 'firewarrior') {
-        // Fire Warriors shoot fireballs from Guard Towers or while roaming
-        const range = s.garrisonedTowerIdx >= 0 ? 320 : 210;
+        const range = s.garrisonedTowerIdx >= 0 ? towerRange : 210;
         const enemy = this.findNearestEnemy(s.x, s.y, range);
-        if (enemy && s.attackTimer <= 0) {
-          s.attackTimer = s.garrisonedTowerIdx >= 0 ? 1.4 : 1.7;
-          s.sprite.setFlipX(enemy.x < s.x);
+        const rivalShaman = !enemy ? this.findNearestHostileShaman(s.x, s.y, range) : null;
+        if ((enemy || rivalShaman) && s.attackTimer <= 0) {
+          s.attackTimer = s.garrisonedTowerIdx >= 0 ? 1.7 : 2.0;
+          const tx = enemy ? enemy.x : rivalShaman!.x;
+          const ty = enemy ? enemy.y : rivalShaman!.y;
+          s.sprite.setFlipX(tx < s.x);
           this.playSfx('fire', 0.22);
-          this.fireProjectile(s.x, s.y - 18, enemy.x, enemy.y - 12, 'vfx_fireball', () => {
-            if (!enemy.dead) {
-              enemy.hp -= 16;
+          this.fireProjectile(s.x, s.y - 18, tx, ty - 12, 'vfx_fireball', () => {
+            if (enemy && !enemy.dead) {
+              enemy.hp -= fireDmg;
               if (enemy.hp <= 0) this.killEnemy(enemy);
+            } else if (rivalShaman && rivalShaman.respawnTimer <= 0) {
+              this.damageRivalShaman(rivalShaman, fireDmg);
             }
           });
         } else if (s.garrisonedTowerIdx < 0) {
-          // Roam toward enemies when not garrisoned in a Guard Tower
           const farEnemy = this.findNearestEnemy(s.x, s.y, 900);
           if (farEnemy) {
             const d = Phaser.Math.Distance.Between(s.x, s.y, farEnemy.x, farEnemy.y);
             if (d > 175) {
               const dx = (farEnemy.x - s.x) / d;
               const dy = (farEnemy.y - s.y) / d;
-              s.x += dx * 52 * dt;
-              s.y += dy * 52 * dt;
+              s.x += dx * 40 * dt;
+              s.y += dy * 40 * dt;
               s.sprite.setFlipX(dx < 0);
             }
           }
@@ -1334,31 +1485,38 @@ export class PlanetScene extends Phaser.Scene {
         }
       } else {
         e.attackTimer = Math.max(0, e.attackTimer - dt);
-        // Check if a player follower is close enough to melee
+        const nearShaman =
+          this.shamanRespawnTimer <= 0 &&
+          Phaser.Math.Distance.Between(e.x, e.y, this.shaman.x, this.shaman.y) <= 32;
         const nearWarrior = this.specialists.find((s) => s.garrisonedTowerIdx < 0 && Phaser.Math.Distance.Between(e.x, e.y, s.x, s.y) <= 28);
         const nearBrave = this.braves.find((b) => b.fsm !== 'breeding' && Phaser.Math.Distance.Between(e.x, e.y, b.x, b.y) <= 26);
+        const nearHut = this.playerHuts.find((h) => h.hp > 0 && Phaser.Math.Distance.Between(e.x, e.y, h.x, h.y) <= 38);
 
-        if (nearWarrior || nearBrave) {
-          const tx = nearWarrior ? nearWarrior.x : nearBrave!.x;
-          const ty = nearWarrior ? nearWarrior.y : nearBrave!.y;
+        if (nearShaman || nearWarrior || nearBrave || nearHut) {
+          const tx = nearShaman ? this.shaman.x : nearWarrior ? nearWarrior.x : nearBrave ? nearBrave.x : nearHut!.x;
+          const ty = nearShaman ? this.shaman.y : nearWarrior ? nearWarrior.y : nearBrave ? nearBrave.y : nearHut!.y;
           e.dir = dir4FromVec(tx - e.x, ty - e.y);
           const pk = `warrior_${e.tribe}_punch_d${e.dir}`;
           if (this.anims.exists(pk) && e.sprite.anims.currentAnim?.key !== pk) e.sprite.play(pk);
           if (e.attackTimer <= 0) {
-            e.attackTimer = 0.9;
+            e.attackTimer = 1.1;
             if ((this.state.activeBuffs.shield ?? 0) <= 0) {
-              if (nearWarrior) {
-                nearWarrior.hp -= 8;
+              if (nearShaman) {
+                this.damagePlayerShaman(11);
+              } else if (nearWarrior) {
+                nearWarrior.hp -= 11;
                 if (nearWarrior.hp <= 0) {
                   applyCombatResult(this.state, 0, 0, 1);
                   this.syncUnitActors();
                 }
               } else if (nearBrave) {
-                nearBrave.hp -= 8;
+                nearBrave.hp -= 11;
                 if (nearBrave.hp <= 0) {
                   applyCombatResult(this.state, 0, 0, 1);
                   this.syncUnitActors();
                 }
+              } else if (nearHut) {
+                nearHut.hp = Math.max(10, nearHut.hp - 10);
               }
             }
           }
@@ -1370,13 +1528,13 @@ export class PlanetScene extends Phaser.Scene {
             if (e.waitTimer <= 0) {
               e.targetX = Phaser.Math.Clamp(e.x + Phaser.Math.Between(-90, 90), 180, WORLD_W - 180);
               e.targetY = Phaser.Math.Clamp(e.y + Phaser.Math.Between(-70, 70), 150, WORLD_H - 150);
-              e.waitTimer = Phaser.Math.FloatBetween(1.0, 2.6);
+              e.waitTimer = Phaser.Math.FloatBetween(1.4, 3.0);
             }
           } else {
             const dx = (e.targetX - e.x) / dist;
             const dy = (e.targetY - e.y) / dist;
-            e.x += dx * 44 * dt;
-            e.y += dy * 44 * dt;
+            e.x += dx * 34 * dt;
+            e.y += dy * 34 * dt;
             e.dir = dir4FromVec(dx, dy);
             const rk = `warrior_${e.tribe}_run_d${e.dir}`;
             if (this.anims.exists(rk) && e.sprite.anims.currentAnim?.key !== rk) e.sprite.play(rk);
@@ -1392,29 +1550,97 @@ export class PlanetScene extends Phaser.Scene {
     }
 
     for (const rs of this.rivalShamans) {
-      const dist = Phaser.Math.Distance.Between(rs.x, rs.y, rs.targetX, rs.targetY);
-      if (dist < 6) {
-        rs.waitTimer -= dt;
-        const sk = `shaman_${rs.tribe}_stand_d${rs.dir}`;
-        if (this.anims.exists(sk) && rs.sprite.anims.currentAnim?.key !== sk) rs.sprite.play(sk);
-        if (rs.waitTimer <= 0) {
-          rs.targetX = Phaser.Math.Clamp(rs.x + Phaser.Math.Between(-110, 110), 200, WORLD_W - 200);
-          rs.targetY = Phaser.Math.Clamp(rs.y + Phaser.Math.Between(-80, 80), 160, WORLD_H - 160);
-          rs.waitTimer = Phaser.Math.FloatBetween(1.5, 3.2);
+      if (rs.respawnTimer > 0) {
+        rs.respawnTimer -= dt;
+        if (rs.respawnTimer <= 0) {
+          rs.hp = rs.maxHp;
+          rs.x = rs.homeX;
+          rs.y = rs.homeY;
+          rs.sprite.setVisible(true);
+          rs.ring.setVisible(true);
+          rs.label.setVisible(true);
+          this.playSfx('shaman_return', 0.25);
+        }
+        continue;
+      }
+
+      rs.attackTimer = Math.max(0, rs.attackTimer - dt);
+      const isAlly = p.allied && cfg.allianceTribe === rs.tribe;
+      const nearPlayerShaman =
+        !isAlly &&
+        this.shamanRespawnTimer <= 0 &&
+        Phaser.Math.Distance.Between(rs.x, rs.y, this.shaman.x, this.shaman.y) <= 38;
+
+      if (nearPlayerShaman) {
+        rs.dir = dir8FromVec(this.shaman.x - rs.x, this.shaman.y - rs.y);
+        const fk = `shaman_${rs.tribe}_fight_d${rs.dir}`;
+        if (this.anims.exists(fk) && rs.sprite.anims.currentAnim?.key !== fk) rs.sprite.play(fk);
+        if (rs.attackTimer <= 0) {
+          rs.attackTimer = 1.05;
+          this.damagePlayerShaman(18);
+          this.playSfx('punch', 0.22);
         }
       } else {
-        const dx = (rs.targetX - rs.x) / dist;
-        const dy = (rs.targetY - rs.y) / dist;
-        rs.x += dx * 52 * dt;
-        rs.y += dy * 52 * dt;
-        rs.dir = dir8FromVec(dx, dy);
-        const wk = `shaman_${rs.tribe}_walk_d${rs.dir}`;
-        if (this.anims.exists(wk) && rs.sprite.anims.currentAnim?.key !== wk) rs.sprite.play(wk);
+        const dist = Phaser.Math.Distance.Between(rs.x, rs.y, rs.targetX, rs.targetY);
+        if (dist < 6) {
+          rs.waitTimer -= dt;
+          const sk = `shaman_${rs.tribe}_stand_d${rs.dir}`;
+          if (this.anims.exists(sk) && rs.sprite.anims.currentAnim?.key !== sk) rs.sprite.play(sk);
+          if (rs.waitTimer <= 0) {
+            rs.targetX = Phaser.Math.Clamp(rs.homeX + Phaser.Math.Between(-110, 110), 200, WORLD_W - 200);
+            rs.targetY = Phaser.Math.Clamp(rs.homeY + Phaser.Math.Between(-80, 80), 160, WORLD_H - 160);
+            rs.waitTimer = Phaser.Math.FloatBetween(1.8, 3.6);
+          }
+        } else {
+          const dx = (rs.targetX - rs.x) / dist;
+          const dy = (rs.targetY - rs.y) / dist;
+          rs.x += dx * 42 * dt;
+          rs.y += dy * 42 * dt;
+          rs.dir = dir8FromVec(dx, dy);
+          const wk = `shaman_${rs.tribe}_walk_d${rs.dir}`;
+          if (this.anims.exists(wk) && rs.sprite.anims.currentAnim?.key !== wk) rs.sprite.play(wk);
+        }
       }
       rs.sprite.setPosition(rs.x, rs.y).setDepth(rs.y);
       rs.ring.setPosition(rs.x, rs.y);
       rs.label.setPosition(rs.x, rs.y - 60);
+      const showRsHp = rs.hp < rs.maxHp;
+      rs.hpBg.setVisible(showRsHp).setPosition(rs.x, rs.y - 50);
+      rs.hpFill.setVisible(showRsHp).setPosition(rs.x - 16, rs.y - 50).setSize(32 * Math.max(0, rs.hp / rs.maxHp), 2);
     }
+  }
+
+  private damageRivalShaman(rs: RivalShamanActor, dmg: number): void {
+    if (rs.respawnTimer > 0) return;
+    rs.hp = Math.max(0, rs.hp - dmg);
+    if (rs.hp <= 0) {
+      rs.respawnTimer = 8.0;
+      rs.sprite.setVisible(false);
+      rs.ring.setVisible(false);
+      rs.label.setVisible(false);
+      rs.hpBg.setVisible(false);
+      rs.hpFill.setVisible(false);
+      applyCombatResult(this.state, 2, 0, 0);
+      this.spawnFloatingText(rs.x, rs.y, 'Rival Shaman Slain!', '#f4c95d');
+      this.onHudSync();
+    }
+  }
+
+  private findNearestHostileShaman(x: number, y: number, maxDist: number): RivalShamanActor | null {
+    const p = this.state.planets[this.state.activePlanetId];
+    const cfg = getPlanetConfig(p.planetId);
+    let best: RivalShamanActor | null = null;
+    let bestD = maxDist;
+    for (const rs of this.rivalShamans) {
+      if (rs.respawnTimer > 0) continue;
+      if (p.allied && cfg.allianceTribe === rs.tribe) continue;
+      const d = Phaser.Math.Distance.Between(x, y, rs.x, rs.y);
+      if (d < bestD) {
+        bestD = d;
+        best = rs;
+      }
+    }
+    return best;
   }
 
   private findNearestTree(x: number, y: number): TreeNode | null {
@@ -1452,44 +1678,88 @@ export class PlanetScene extends Phaser.Scene {
       this.rebuildPlanetVisuals();
     }
 
-    let dx = this.joystickVec.x;
-    let dy = this.joystickVec.y;
-    if (this.cursors) {
-      if (this.cursors.left.isDown || this.wasd.A.isDown) dx -= 1;
-      if (this.cursors.right.isDown || this.wasd.D.isDown) dx += 1;
-      if (this.cursors.up.isDown || this.wasd.W.isDown) dy -= 1;
-      if (this.cursors.down.isDown || this.wasd.S.isDown) dy += 1;
-    }
+    // Shaman Reincarnation state (5s after death, plays shaman_return SFX on return!)
+    if (this.shamanRespawnTimer > 0) {
+      this.shamanRespawnTimer -= dt;
+      this.respawnCircle.setScale(0.92 + 0.12 * Math.sin(_time * 0.008));
+      this.respawnText.setText(`Reincarnating ${Math.max(1, Math.ceil(this.shamanRespawnTimer))}s`);
+      if (this.shamanRespawnTimer <= 0) {
+        this.shamanHp = getShamanMaxHp(this.state);
+        this.shaman.setPosition(WORLD_W / 2, WORLD_H / 2).setVisible(true);
+        this.shamanLabel.setVisible(true);
+        this.respawnCircle.setVisible(false);
+        this.respawnText.setVisible(false);
+        this.playSfx('shaman_return', 0.45);
+        this.spawnFloatingText(this.shaman.x, this.shaman.y - 24, 'Reincarnated!', '#f4c95d');
+      }
+    } else {
+      let dx = this.joystickVec.x;
+      let dy = this.joystickVec.y;
+      if (this.cursors) {
+        if (this.cursors.left.isDown || this.wasd.A.isDown) dx -= 1;
+        if (this.cursors.right.isDown || this.wasd.D.isDown) dx += 1;
+        if (this.cursors.up.isDown || this.wasd.W.isDown) dy -= 1;
+        if (this.cursors.down.isDown || this.wasd.S.isDown) dy += 1;
+      }
 
-    const len = Math.hypot(dx, dy);
-    if (len > 0.05) {
-      dx /= Math.max(1, len);
-      dy /= Math.max(1, len);
-      const speed = 175;
-      this.shaman.x = (this.shaman.x + dx * speed * dt + WORLD_W) % WORLD_W;
-      this.shaman.y = (this.shaman.y + dy * speed * dt + WORLD_H) % WORLD_H;
-      this.shamanDir = dir8FromVec(dx, dy);
-      if (this.castAnimTimer <= 0) {
-        const walkKey = `shaman_blue_walk_d${this.shamanDir}`;
-        if (this.anims.exists(walkKey) && this.shaman.anims.currentAnim?.key !== walkKey) {
-          this.shaman.play(walkKey);
+      const len = Math.hypot(dx, dy);
+      const nearEnemy = this.findNearestEnemy(this.shaman.x, this.shaman.y, 38);
+      const nearRival = !nearEnemy ? this.findNearestHostileShaman(this.shaman.x, this.shaman.y, 40) : null;
+      this.shamanAttackTimer = Math.max(0, this.shamanAttackTimer - dt);
+
+      if (len > 0.05) {
+        dx /= Math.max(1, len);
+        dy /= Math.max(1, len);
+        const speed = 135;
+        this.shaman.x = (this.shaman.x + dx * speed * dt + WORLD_W) % WORLD_W;
+        this.shaman.y = (this.shaman.y + dy * speed * dt + WORLD_H) % WORLD_H;
+        this.shamanDir = dir8FromVec(dx, dy);
+        if (this.castAnimTimer <= 0) {
+          const walkKey = `shaman_blue_walk_d${this.shamanDir}`;
+          if (this.anims.exists(walkKey) && this.shaman.anims.currentAnim?.key !== walkKey) {
+            this.shaman.play(walkKey);
+          }
         }
+      } else if (this.castAnimTimer <= 0 && (nearEnemy || nearRival)) {
+        const tx = nearEnemy ? nearEnemy.x : nearRival!.x;
+        const ty = nearEnemy ? nearEnemy.y : nearRival!.y;
+        this.shamanDir = dir8FromVec(tx - this.shaman.x, ty - this.shaman.y);
+        const fightKey = `shaman_blue_fight_d${this.shamanDir}`;
+        if (this.anims.exists(fightKey) && this.shaman.anims.currentAnim?.key !== fightKey) {
+          this.shaman.play(fightKey);
+        }
+        if (this.shamanAttackTimer <= 0) {
+          this.shamanAttackTimer = 1.0;
+          this.playSfx('punch', 0.25);
+          if (nearEnemy) {
+            nearEnemy.hp -= 18;
+            if (nearEnemy.hp <= 0) this.killEnemy(nearEnemy);
+          } else if (nearRival) {
+            this.damageRivalShaman(nearRival, 18);
+          }
+        }
+      } else if (this.castAnimTimer <= 0) {
+        const standKey = `shaman_blue_stand_d${this.shamanDir}`;
+        if (this.anims.exists(standKey) && this.shaman.anims.currentAnim?.key !== standKey) {
+          this.shaman.play(standKey);
+        }
+        // Slow out-of-combat HP regeneration
+        this.shamanHp = Math.min(getShamanMaxHp(this.state), this.shamanHp + 3 * dt);
       }
-    } else if (this.castAnimTimer <= 0) {
-      const standKey = `shaman_blue_stand_d${this.shamanDir}`;
-      if (this.anims.exists(standKey) && this.shaman.anims.currentAnim?.key !== standKey) {
-        this.shaman.play(standKey);
+
+      if (this.castAnimTimer > 0) this.castAnimTimer -= dt;
+      this.shaman.setDepth(this.shaman.y);
+      this.shamanLabel.setPosition(this.shaman.x, this.shaman.y - 62);
+      const maxHp = getShamanMaxHp(this.state);
+      const showShamanHp = this.shamanHp < maxHp;
+      this.shamanHpBg.setVisible(showShamanHp).setPosition(this.shaman.x, this.shaman.y - 52);
+      this.shamanHpFill.setVisible(showShamanHp).setPosition(this.shaman.x - 16, this.shaman.y - 52).setSize(32 * (this.shamanHp / maxHp), 2);
+
+      const range = getCastRangePx(this.state, this.state.activePlanetId);
+      this.rangeCircle.setVisible(Number.isFinite(range));
+      if (Number.isFinite(range)) {
+        this.rangeCircle.setPosition(this.shaman.x, this.shaman.y).setRadius(range);
       }
-    }
-
-    if (this.castAnimTimer > 0) this.castAnimTimer -= dt;
-    this.shaman.setDepth(this.shaman.y);
-    this.shamanLabel.setPosition(this.shaman.x, this.shaman.y - 62);
-
-    const range = getCastRangePx(this.state, this.state.activePlanetId);
-    this.rangeCircle.setVisible(Number.isFinite(range));
-    if (Number.isFinite(range)) {
-      this.rangeCircle.setPosition(this.shaman.x, this.shaman.y).setRadius(range);
     }
 
     this.updateConvertCircles(dt);

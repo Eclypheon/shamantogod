@@ -503,18 +503,18 @@ html, body, #app, #game-container {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 900px;
-  height: 540px;
-  margin-left: -450px;
-  margin-top: -270px;
+  width: 1200px;
+  height: 800px;
+  margin-left: -600px;
+  margin-top: -400px;
   transform-origin: center center;
 }
 
 .pantheon-lines {
   position: absolute;
   inset: 0;
-  width: 900px;
-  height: 540px;
+  width: 1200px;
+  height: 800px;
   pointer-events: none;
 }
 

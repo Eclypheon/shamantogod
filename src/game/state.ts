@@ -1,4 +1,4 @@
-import { META_UPGRADES, PLANETS, SPELLS, type MetaUpgradeConfig, type PlanetConfig, type SpellConfig } from './data';
+import { META_UPGRADES, PLANETS, SPELLS, type MetaUpgradeConfig, type MetaUpgradeId, type PlanetConfig, type SpellConfig } from './data';
 
 export type BuildingBlueprintKind = 'hut' | 'warrior_hut' | 'temple' | 'firewarrior_hut' | 'guard_tower';
 
@@ -44,11 +44,17 @@ export interface GameState {
   spellCooldowns: Record<string, number>;
   activeBuffs: Record<string, number>;
   muted: boolean;
-  metaLevels: Record<MetaUpgradeConfig['id'], number>;
+  metaLevels: Record<MetaUpgradeId, number>;
   planets: Record<number, PlanetProgress>;
 }
 
 const SAVE_KEY = 'shamantogod_save_v3';
+
+function createDefaultMetaLevels(): Record<MetaUpgradeId, number> {
+  const levels = {} as Record<MetaUpgradeId, number>;
+  for (const u of META_UPGRADES) levels[u.id] = 0;
+  return levels;
+}
 
 export const BUILDING_COSTS = {
   warrior_hut: 120,
@@ -104,16 +110,7 @@ export function createInitialState(now = Date.now()): GameState {
     spellCooldowns: {},
     activeBuffs: {},
     muted: false,
-    metaLevels: {
-      startingMana: 0,
-      manaRate: 0,
-      castRange: 0,
-      spellPower: 0,
-      popCap: 0,
-      offlineEfficiency: 0,
-      timberMastery: 0,
-      tempestForce: 0,
-    },
+    metaLevels: createDefaultMetaLevels(),
     planets,
   };
 }
@@ -144,22 +141,60 @@ export function getCastRangePx(state: GameState, planetId: number): number {
 }
 
 export function getSpellPowerMult(state: GameState): number {
-  return 1 + state.metaLevels.spellPower * 0.2;
+  return 1 + state.metaLevels.spellPower * 0.18;
 }
 
 export function getTimberSpeedMult(state: GameState): number {
-  return 1 + state.metaLevels.timberMastery * 0.2;
+  return 1 + state.metaLevels.timberMastery * 0.18;
+}
+
+export function getTreeRegrowSec(state: GameState): number {
+  return Math.max(25, 75 * (1 - state.metaLevels.sacredGroves * 0.15));
+}
+
+export function getWarriorPowerMult(state: GameState): number {
+  return 1 + state.metaLevels.ironDiscipline * 0.2;
+}
+
+export function getPreacherSpeedMult(state: GameState): number {
+  return 1 + state.metaLevels.zealotSermons * 0.2;
+}
+
+export function getTowerRangePx(state: GameState): number {
+  return 310 * (1 + state.metaLevels.watchtowerPrecision * 0.25);
+}
+
+export function getShamanMaxHp(state: GameState): number {
+  return Math.round(180 * (1 + state.metaLevels.crownOfKaelis * 0.15));
+}
+
+export function getSpellManaCost(state: GameState, spell: SpellConfig): number {
+  if (spell.isStoneHead) return 0;
+  return Math.max(5, Math.round(spell.manaCost * Math.max(0.4, 1 - state.metaLevels.astralConduit * 0.1)));
+}
+
+export function getSpellCooldownSec(state: GameState, spell: SpellConfig): number {
+  return Math.max(0.6, spell.cooldownSec * Math.max(0.4, 1 - state.metaLevels.sovereignSight * 0.1));
+}
+
+export function onShamanDied(state: GameState): { manaLost: number; respawnSec: number } {
+  const penalty = Math.max(250, 1000 - state.metaLevels.soulAnchor * 150);
+  const actualLoss = Math.min(state.mana, penalty);
+  state.mana = Math.max(0, state.mana - penalty);
+  const respawnSec = Math.max(2.5, 5.0 - state.metaLevels.soulAnchor * 0.5);
+  return { manaLost: Math.floor(actualLoss), respawnSec };
 }
 
 export function getPlanetManaPerSec(state: GameState, planetId: number): number {
   const p = state.planets[planetId];
   if (!p.unlocked) return 0;
-  const baseShaman = planetId === state.activePlanetId ? 0.8 : 0;
+  const baseShaman = planetId === state.activePlanetId ? 0.6 : 0;
   const followerRate =
-    p.braves * 0.55 + p.preachers * 0.9 + p.warriors * 0.45 + p.fireWarriors * 0.75 + p.hutsBuilt * 1.6;
+    p.braves * 0.45 + p.preachers * 0.8 + p.warriors * 0.4 + p.fireWarriors * 0.65 + p.hutsBuilt * 1.4;
   const allianceBonus = p.allied ? 1.25 : 1;
-  const metaMult = 1 + state.metaLevels.manaRate * 0.25;
-  const backgroundFactor = planetId === state.activePlanetId ? 1 : 0.45;
+  const metaMult = (1 + state.metaLevels.manaRate * 0.2) * (1 + state.metaLevels.crownOfKaelis * 0.15);
+  const bgBonus = 0.4 + state.metaLevels.orbitalLeylines * 0.15;
+  const backgroundFactor = planetId === state.activePlanetId ? 1 : bgBonus;
   return (baseShaman + followerRate) * allianceBonus * metaMult * backgroundFactor;
 }
 
@@ -178,6 +213,11 @@ export function getMetaUpgradeCost(cfg: MetaUpgradeConfig, level: number): numbe
 export function isMetaNodeUnlocked(state: GameState, cfg: MetaUpgradeConfig): boolean {
   if (!cfg.parent) return true;
   return (state.metaLevels[cfg.parent] ?? 0) > 0;
+}
+
+/** Progressive disclosure: show Tier-1 roots, already-leveled nodes, and immediate children of leveled nodes. */
+export function isMetaNodeVisible(state: GameState, cfg: MetaUpgradeConfig): boolean {
+  return isMetaNodeUnlocked(state, cfg) || (state.metaLevels[cfg.id] ?? 0) > 0;
 }
 
 export function buyMetaUpgrade(state: GameState, id: MetaUpgradeConfig['id']): boolean {
@@ -336,12 +376,13 @@ export function castSpell(
     return { ok: false, reason: 'Out of Shaman cast range' };
   }
 
-  if (state.mana < spell.manaCost) {
+  const manaCost = getSpellManaCost(state, spell);
+  if (state.mana < manaCost) {
     return { ok: false, reason: 'Not enough Mana' };
   }
 
-  state.mana -= spell.manaCost;
-  state.spellCooldowns[spell.id] = spell.cooldownSec;
+  state.mana -= manaCost;
+  state.spellCooldowns[spell.id] = getSpellCooldownSec(state, spell);
 
   if (spell.id === 'convert' || spell.id === 'blast') {
     return { ok: true };

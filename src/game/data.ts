@@ -29,18 +29,36 @@ export interface SpellConfig {
   description: string;
 }
 
+export type MetaUpgradeId =
+  | 'startingMana'
+  | 'manaRate'
+  | 'offlineEfficiency'
+  | 'orbitalLeylines'
+  | 'astralConduit'
+  | 'spellPower'
+  | 'castRange'
+  | 'sovereignSight'
+  | 'tempestForce'
+  | 'cataclysmMastery'
+  | 'godfireApex'
+  | 'popCap'
+  | 'timberMastery'
+  | 'sacredGroves'
+  | 'ironDiscipline'
+  | 'zealotSermons'
+  | 'watchtowerPrecision'
+  | 'soulAnchor'
+  | 'tributeOfBlood'
+  | 'allianceFavor'
+  | 'planetaryEcho'
+  | 'crownOfKaelis';
+
 export interface MetaUpgradeConfig {
-  id:
-    | 'startingMana'
-    | 'manaRate'
-    | 'castRange'
-    | 'spellPower'
-    | 'popCap'
-    | 'offlineEfficiency'
-    | 'timberMastery'
-    | 'tempestForce';
+  id: MetaUpgradeId;
   name: string;
-  parent?: MetaUpgradeConfig['id'];
+  parent?: MetaUpgradeId;
+  x: number;
+  y: number;
   baseCost: number;
   costScale: number;
   maxLevel: number;
@@ -91,15 +109,33 @@ export const SPELLS: SpellConfig[] = [
 ];
 
 export const META_UPGRADES: MetaUpgradeConfig[] = [
-  // Branch 1: Way of Mana
-  { id: 'startingMana', name: 'Ancestral Font', baseCost: 5, costScale: 1.6, maxLevel: 20, description: '+50 starting Mana on every planet.' },
-  { id: 'manaRate', name: 'Worship Resonance', parent: 'startingMana', baseCost: 8, costScale: 1.7, maxLevel: 25, description: '+25% Mana/sec across all planets.' },
-  { id: 'offlineEfficiency', name: 'Eternal Vigil', parent: 'manaRate', baseCost: 12, costScale: 1.8, maxLevel: 10, description: '+10% offline passive progress.' },
-  // Branch 2: Way of War
-  { id: 'spellPower', name: 'Arcane Surge', baseCost: 8, costScale: 1.75, maxLevel: 25, description: '+20% spell power and conversion speed.' },
-  { id: 'castRange', name: 'Astral Reach', parent: 'spellPower', baseCost: 6, costScale: 1.55, maxLevel: 15, description: '+15% Shaman cast range (Planets 1-11).' },
-  { id: 'tempestForce', name: 'Tempest Force', parent: 'spellPower', baseCost: 10, costScale: 1.7, maxLevel: 15, description: '+15% Blast radius and knockback force.' },
-  // Branch 3: Way of the Village
-  { id: 'popCap', name: 'Fertile Huts', baseCost: 7, costScale: 1.65, maxLevel: 20, description: '+5 max follower capacity per planet.' },
-  { id: 'timberMastery', name: 'Timber Mastery', parent: 'popCap', baseCost: 9, costScale: 1.65, maxLevel: 15, description: '+20% Brave tree-chopping and hut building speed.' },
+  // Bough 1: Way of Mana (upper-left)
+  { id: 'startingMana', name: 'Ancestral Font', x: 430, y: 315, baseCost: 5, costScale: 1.55, maxLevel: 15, description: '+50 starting Mana on every planet.' },
+  { id: 'manaRate', name: 'Worship Resonance', parent: 'startingMana', x: 300, y: 220, baseCost: 8, costScale: 1.65, maxLevel: 20, description: '+20% Mana/sec across all planets.' },
+  { id: 'offlineEfficiency', name: 'Eternal Vigil', parent: 'manaRate', x: 165, y: 265, baseCost: 12, costScale: 1.7, maxLevel: 10, description: '+10% offline passive progress.' },
+  { id: 'orbitalLeylines', name: 'Orbital Leylines', parent: 'manaRate', x: 245, y: 105, baseCost: 16, costScale: 1.75, maxLevel: 15, description: '+15% passive Mana from conquered worlds.' },
+  { id: 'astralConduit', name: 'Astral Conduit', parent: 'orbitalLeylines', x: 110, y: 95, baseCost: 28, costScale: 1.85, maxLevel: 6, description: '-10% spell Mana costs.' },
+
+  // Bough 2: Way of War (upper-right)
+  { id: 'spellPower', name: 'Arcane Surge', x: 770, y: 315, baseCost: 6, costScale: 1.6, maxLevel: 20, description: '+18% spell power and conversion speed.' },
+  { id: 'castRange', name: 'Astral Reach', parent: 'spellPower', x: 885, y: 195, baseCost: 8, costScale: 1.55, maxLevel: 12, description: '+15% Shaman cast range (Planets 1-11).' },
+  { id: 'sovereignSight', name: 'Sovereign Sight', parent: 'castRange', x: 1015, y: 115, baseCost: 18, costScale: 1.75, maxLevel: 6, description: '-10% spell cooldowns.' },
+  { id: 'tempestForce', name: 'Tempest Force', parent: 'spellPower', x: 935, y: 315, baseCost: 10, costScale: 1.65, maxLevel: 15, description: '+15% Blast radius and knockback.' },
+  { id: 'cataclysmMastery', name: 'Cataclysm Mastery', parent: 'tempestForce', x: 1065, y: 255, baseCost: 20, costScale: 1.75, maxLevel: 12, description: '+25% siege damage to enemy Huts.' },
+  { id: 'godfireApex', name: 'Godfire Apex', parent: 'cataclysmMastery', x: 1125, y: 375, baseCost: 35, costScale: 1.9, maxLevel: 10, description: '+20% Fire Warrior fireball damage.' },
+
+  // Bough 3: Way of the Village (lower-left)
+  { id: 'popCap', name: 'Fertile Huts', x: 430, y: 495, baseCost: 6, costScale: 1.6, maxLevel: 18, description: '+5 max follower capacity per planet.' },
+  { id: 'timberMastery', name: 'Timber Mastery', parent: 'popCap', x: 275, y: 505, baseCost: 9, costScale: 1.6, maxLevel: 12, description: '+18% Brave chopping & building speed.' },
+  { id: 'sacredGroves', name: 'Sacred Groves', parent: 'timberMastery', x: 135, y: 465, baseCost: 16, costScale: 1.7, maxLevel: 5, description: '-15% tree regrowth time.' },
+  { id: 'ironDiscipline', name: 'Iron Discipline', parent: 'popCap', x: 355, y: 635, baseCost: 12, costScale: 1.65, maxLevel: 15, description: '+20% Warrior HP and melee damage.' },
+  { id: 'zealotSermons', name: 'Zealot Sermons', parent: 'ironDiscipline', x: 205, y: 660, baseCost: 18, costScale: 1.7, maxLevel: 10, description: '+20% Preacher conversion speed.' },
+  { id: 'watchtowerPrecision', name: 'Watchtower Sight', parent: 'ironDiscipline', x: 455, y: 725, baseCost: 20, costScale: 1.7, maxLevel: 8, description: '+25% Guard Tower fireball range.' },
+
+  // Bough 4: Way of Divinity (lower-right)
+  { id: 'soulAnchor', name: 'Soul Anchor', x: 770, y: 495, baseCost: 8, costScale: 1.65, maxLevel: 5, description: '-150 Mana lost on Shaman death & faster reincarnation.' },
+  { id: 'tributeOfBlood', name: 'Tribute of Blood', parent: 'soulAnchor', x: 915, y: 525, baseCost: 14, costScale: 1.7, maxLevel: 15, description: '+20% pending Divine Essence from kills.' },
+  { id: 'allianceFavor', name: 'Alliance Favor', parent: 'soulAnchor', x: 730, y: 635, baseCost: 14, costScale: 1.7, maxLevel: 5, description: '-15% Mana cost to seal Alliances.' },
+  { id: 'planetaryEcho', name: 'Planetary Echo', parent: 'tributeOfBlood', x: 1045, y: 615, baseCost: 24, costScale: 1.8, maxLevel: 12, description: '+25% passive destruction on conquered worlds.' },
+  { id: 'crownOfKaelis', name: 'Crown of Kaelis', parent: 'planetaryEcho', x: 925, y: 725, baseCost: 45, costScale: 2.0, maxLevel: 10, description: '+15% all Mana, Essence, and Shaman HP.' },
 ];

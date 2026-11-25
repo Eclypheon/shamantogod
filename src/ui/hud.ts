@@ -12,6 +12,7 @@ import {
   hasSavedGame,
   isCampaignWon,
   isMetaNodeUnlocked,
+  isMetaNodeVisible,
   isSpellUnlocked,
   orderBuilding,
   prestigeToPlanet,
@@ -28,22 +29,7 @@ interface BeforeInstallPromptEvent extends Event {
 }
 
 const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII', 'XIII', 'XIV', 'XV'];
-
-// Organic branched tree coordinates inside 900x540 parchment stage (center spark = 450, 270)
-const SPARK_POS = { x: 450, y: 270 };
-const NODE_POS: Record<MetaUpgradeConfig['id'], { x: number; y: number }> = {
-  // Branch 1: Way of Mana (upper-left arc)
-  startingMana: { x: 295, y: 205 },
-  manaRate: { x: 185, y: 125 },
-  offlineEfficiency: { x: 110, y: 245 },
-  // Branch 2: Way of War (right bough splitting into two)
-  spellPower: { x: 605, y: 205 },
-  castRange: { x: 735, y: 120 },
-  tempestForce: { x: 765, y: 275 },
-  // Branch 3: Way of the Village (lower root bough)
-  popCap: { x: 450, y: 395 },
-  timberMastery: { x: 305, y: 445 },
-};
+const SPARK_POS = { x: 600, y: 400 };
 
 export class HudController {
   private root: HTMLElement;
@@ -56,7 +42,7 @@ export class HudController {
   private selectedMetaId: MetaUpgradeConfig['id'] = 'startingMana';
   private panX = 0;
   private panY = 0;
-  private zoom = 0.56;
+  private zoom = 0.72;
   private toastTimer = 0;
   private onJoystick: (x: number, y: number) => void;
   private onResetState: (fresh: GameState) => void;
@@ -332,43 +318,47 @@ export class HudController {
     if (!this.pantheonOpen) return;
 
     const conquered = PLANETS.filter((pl) => this.state.planets[pl.id].conquered).length;
-    const selected = META_UPGRADES.find((u) => u.id === this.selectedMetaId) ?? META_UPGRADES[0];
+    const visibleNodes = META_UPGRADES.filter((u) => isMetaNodeVisible(this.state, u));
+    const selected = visibleNodes.find((u) => u.id === this.selectedMetaId) ?? visibleNodes[0];
+    this.selectedMetaId = selected.id;
     const selLvl = this.state.metaLevels[selected.id];
     const selCost = getMetaUpgradeCost(selected, selLvl);
     const selMaxed = selLvl >= selected.maxLevel;
     const selUnlocked = isMetaNodeUnlocked(this.state, selected);
 
-    // Organic curved Bezier branches from parent (or center spark) to each child node
-    const pathsSvg = META_UPGRADES.map((u) => {
-      const from = u.parent ? NODE_POS[u.parent] : SPARK_POS;
-      const to = NODE_POS[u.id];
-      const mx = (from.x + to.x) / 2 + (to.y - from.y) * 0.16;
-      const my = (from.y + to.y) / 2 - (to.x - from.x) * 0.16;
-      const leveled = this.state.metaLevels[u.id] > 0;
-      const unlocked = isMetaNodeUnlocked(this.state, u);
-      const stroke = leveled ? '#b87c1e' : unlocked ? 'rgba(140,98,41,0.68)' : 'rgba(140,98,41,0.28)';
-      return `<path d="M ${from.x} ${from.y} Q ${mx} ${my} ${to.x} ${to.y}" fill="none" stroke="${stroke}" stroke-width="${leveled ? '3.5' : '2'}" stroke-dasharray="${leveled ? '' : '5 4'}" />`;
-    }).join('');
+    // Organic curved Bezier branches for visible nodes only (fog-of-war progressive discovery)
+    const pathsSvg = visibleNodes
+      .map((u) => {
+        const parentCfg = u.parent ? META_UPGRADES.find((m) => m.id === u.parent) : null;
+        const from = parentCfg ? { x: parentCfg.x, y: parentCfg.y } : SPARK_POS;
+        const to = { x: u.x, y: u.y };
+        const mx = (from.x + to.x) / 2 + (to.y - from.y) * 0.14;
+        const my = (from.y + to.y) / 2 - (to.x - from.x) * 0.14;
+        const leveled = this.state.metaLevels[u.id] > 0;
+        const stroke = leveled ? '#b87c1e' : 'rgba(140,98,41,0.62)';
+        return `<path d="M ${from.x} ${from.y} Q ${mx} ${my} ${to.x} ${to.y}" fill="none" stroke="${stroke}" stroke-width="${leveled ? '3.5' : '2'}" stroke-dasharray="${leveled ? '' : '5 4'}" />`;
+      })
+      .join('');
 
-    const nodesHtml = META_UPGRADES.map((u) => {
-      const pos = NODE_POS[u.id];
-      const lvl = this.state.metaLevels[u.id];
-      const cost = getMetaUpgradeCost(u, lvl);
-      const maxed = lvl >= u.maxLevel;
-      const unlocked = isMetaNodeUnlocked(this.state, u);
-      const affordable = unlocked && !maxed && this.state.divineEssence >= cost;
-      const cls = `p-node ${lvl > 0 ? 'leveled' : ''} ${affordable ? 'affordable' : ''} ${!unlocked ? 'locked' : ''}`;
-      return `<button class="${cls}" style="left:${pos.x}px;top:${pos.y}px;" data-pnode="${u.id}">
-        <span class="pn-name">${u.name}</span>
-        <span class="pn-lvl">${unlocked ? `Lv ${lvl}/${u.maxLevel}` : 'Locked'}</span>
-        <span class="pn-cost">${maxed ? 'MAX' : `${cost} Ess`}</span>
-      </button>`;
-    }).join('');
+    const nodesHtml = visibleNodes
+      .map((u) => {
+        const lvl = this.state.metaLevels[u.id];
+        const cost = getMetaUpgradeCost(u, lvl);
+        const maxed = lvl >= u.maxLevel;
+        const affordable = !maxed && this.state.divineEssence >= cost;
+        const cls = `p-node ${lvl > 0 ? 'leveled' : ''} ${affordable ? 'affordable' : ''}`;
+        return `<button class="${cls}" style="left:${u.x}px;top:${u.y}px;" data-pnode="${u.id}">
+          <span class="pn-name">${u.name}</span>
+          <span class="pn-lvl">Lv ${lvl}/${u.maxLevel}</span>
+          <span class="pn-cost">${maxed ? 'MAX' : `${cost} Ess`}</span>
+        </button>`;
+      })
+      .join('');
 
     this.elPantheonModal.innerHTML = `
       <div class="parchment-board">
         <div class="pantheon-header">
-          <h2>PANTHEON OF KAELIS</h2>
+          <h2>PANTHEON OF KAELIS (${visibleNodes.length}/${META_UPGRADES.length})</h2>
           <div style="display:flex;align-items:center;gap:6px;">
             <span class="metric">Essence: <strong>${Math.floor(this.state.divineEssence)}</strong> <span class="sub">(+${Math.floor(this.state.pendingDivineEssence)} on Prestige)</span></span>
             <button class="btn" id="btn-zoom-out">-</button>
@@ -379,7 +369,7 @@ export class HudController {
         </div>
         <div class="pantheon-canvas" id="pantheon-viewport">
           <div class="pantheon-stage" id="pantheon-stage" style="transform:translate(${this.panX}px,${this.panY}px) scale(${this.zoom});">
-            <svg class="pantheon-lines" viewBox="0 0 900 540">${pathsSvg}</svg>
+            <svg class="pantheon-lines" viewBox="0 0 1200 800">${pathsSvg}</svg>
             <div class="p-node center-node" style="left:${SPARK_POS.x}px;top:${SPARK_POS.y}px;">
               <span class="pn-name">SHAMAN'S SPARK</span>
               <span class="pn-lvl">${conquered}/15 Worlds</span>
@@ -426,22 +416,22 @@ export class HudController {
     viewport.addEventListener('pointercancel', () => { dragging = false; });
     viewport.addEventListener('wheel', (e) => {
       e.preventDefault();
-      this.zoom = Math.max(0.55, Math.min(1.65, this.zoom - e.deltaY * 0.001));
+      this.zoom = Math.max(0.38, Math.min(1.65, this.zoom - e.deltaY * 0.001));
       applyTransform();
     }, { passive: false });
 
     this.elPantheonModal.querySelector('#btn-zoom-in')?.addEventListener('click', () => {
-      this.zoom = Math.min(1.65, this.zoom + 0.16);
+      this.zoom = Math.min(1.65, this.zoom + 0.14);
       applyTransform();
     });
     this.elPantheonModal.querySelector('#btn-zoom-out')?.addEventListener('click', () => {
-      this.zoom = Math.max(0.55, this.zoom - 0.16);
+      this.zoom = Math.max(0.38, this.zoom - 0.14);
       applyTransform();
     });
     this.elPantheonModal.querySelector('#btn-zoom-reset')?.addEventListener('click', () => {
       this.panX = 0;
       this.panY = 0;
-      this.zoom = 0.56;
+      this.zoom = 0.72;
       applyTransform();
     });
 

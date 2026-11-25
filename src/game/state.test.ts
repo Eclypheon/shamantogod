@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { META_UPGRADES } from './data';
 import {
   applyOfflineProgress,
   buyMetaUpgrade,
@@ -8,7 +9,9 @@ import {
   formAlliance,
   getCastRangePx,
   hydrateState,
+  isMetaNodeVisible,
   onBuildingConstructed,
+  onShamanDied,
   onWildmanConverted,
   orderBuilding,
   prestigeToPlanet,
@@ -71,13 +74,26 @@ describe('Shaman to God simulation', () => {
     expect(globalCast.ok).toBe(true);
   });
 
-  it('enforces branched parent prerequisites on Pantheon nodes', () => {
+  it('progressively reveals deeper Pantheon nodes only after parent is blessed', () => {
     const state = createInitialState();
+    const initialVisible = META_UPGRADES.filter((u) => isMetaNodeVisible(state, u));
+    expect(initialVisible.length).toBe(4); // 4 Tier-1 bough roots
+
     state.divineEssence = 100;
     expect(buyMetaUpgrade(state, 'manaRate')).toBe(false);
     expect(buyMetaUpgrade(state, 'startingMana')).toBe(true);
+    const afterVisible = META_UPGRADES.filter((u) => isMetaNodeVisible(state, u));
+    expect(afterVisible.some((u) => u.id === 'manaRate')).toBe(true);
     expect(buyMetaUpgrade(state, 'manaRate')).toBe(true);
-    expect(state.metaLevels.manaRate).toBe(1);
+  });
+
+  it('penalizes Shaman death by 1000 Mana and sets 5s reincarnation timer', () => {
+    const state = createInitialState();
+    state.mana = 1400;
+    const res = onShamanDied(state);
+    expect(res.manaLost).toBe(1000);
+    expect(res.respawnSec).toBe(5.0);
+    expect(state.mana).toBe(400);
   });
 
   it('applies bounded offline Mana progress', () => {
