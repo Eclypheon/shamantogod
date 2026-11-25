@@ -256,14 +256,19 @@ export class PlanetScene extends Phaser.Scene {
   private castAnimTimer = 0;
   private currentPlanetRendered = -1;
   private renderedAllied = false;
-  private enemyRaidTimer = 8;
+  private enemyRaidTimer = 45;
   private simAccum = 0;
+  private paused = true;
 
   constructor(state: GameState, onHudSync: () => void, onToast: (msg: string) => void) {
     super('PlanetScene');
     this.state = state;
     this.onHudSync = onHudSync;
     this.onToast = onToast;
+  }
+
+  setPaused(val: boolean): void {
+    this.paused = val;
   }
 
   replaceState(next: GameState): void {
@@ -353,8 +358,9 @@ export class PlanetScene extends Phaser.Scene {
     }
 
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-      const target = pointer.event.target as HTMLElement | null;
-      if (target && target.closest('#hud')) return;
+      if (this.paused) return;
+      const target = pointer.event?.target as HTMLElement | null;
+      if (target && typeof target.closest === 'function' && target.closest('#hud')) return;
       const worldPt = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
       this.handleCastAt(worldPt.x, worldPt.y);
     });
@@ -460,6 +466,7 @@ export class PlanetScene extends Phaser.Scene {
 
     this.clearPlanetObjects();
     this.shaman.setPosition(WORLD_W / 2, WORLD_H / 2);
+    this.enemyRaidTimer = cfg.id === 1 ? 45 : Math.max(12, 30 - cfg.id * 1.5);
 
     // Terrain
     this.terrainGfx.clear();
@@ -1718,18 +1725,18 @@ export class PlanetScene extends Phaser.Scene {
       }
     }
 
-    // Periodic enemy raids once the player has built at least 1 Hut (keeps opening calm, then ramps combat!)
+    // Periodic enemy raids once the player has built at least 1 Hut (longer initial grace period on World 1!)
     if (p.hutsBuilt >= 1 && this.enemyHuts.length > 0) {
       this.enemyRaidTimer -= dt;
       if (this.enemyRaidTimer <= 0) {
-        this.enemyRaidTimer = Math.max(6, 14 - cfg.id * 0.5);
-        const aliveEnemies = this.enemies.filter((e) => !e.dead);
-        if (aliveEnemies.length < 7) {
+        this.enemyRaidTimer = cfg.id === 1 ? 26 : Math.max(8, 18 - cfg.id * 0.6);
+        const aliveEnemies = this.enemies.filter((e) => !e.dead && !e.insideTraining);
+        if (aliveEnemies.length < (cfg.id === 1 ? 4 : 7)) {
           const eh = this.enemyHuts[Phaser.Math.Between(0, this.enemyHuts.length - 1)];
           this.spawnEnemy(eh.tribe, eh.x, eh.y + 18);
         }
-        // Send 1-2 enemy warriors marching toward the player's village
-        for (const e of aliveEnemies.slice(0, 2)) {
+        const raiders = aliveEnemies.filter((e) => e.role === 'warrior').slice(0, cfg.id === 1 ? 1 : 2);
+        for (const e of raiders) {
           e.targetX = WORLD_W / 2 + Phaser.Math.Between(-90, 90);
           e.targetY = WORLD_H / 2 + Phaser.Math.Between(-70, 70);
         }
@@ -2043,6 +2050,7 @@ export class PlanetScene extends Phaser.Scene {
     if (this.currentPlanetRendered !== this.state.activePlanetId || this.renderedAllied !== activeP.allied) {
       this.rebuildPlanetVisuals();
     }
+    if (this.paused) return;
 
     // Shaman Reincarnation state (5s after death, plays shaman_return SFX on return!)
     if (this.shamanRespawnTimer > 0) {
@@ -2129,10 +2137,14 @@ export class PlanetScene extends Phaser.Scene {
       }
     }
 
-    this.updateConvertCircles(dt);
-    this.updateBravesAndHuts(dt);
-    this.updateSpecialists(dt);
-    this.updateEnemiesAndRivals(dt);
+    try {
+      this.updateConvertCircles(dt);
+      this.updateBravesAndHuts(dt);
+      this.updateSpecialists(dt);
+      this.updateEnemiesAndRivals(dt);
+    } catch (err) {
+      console.error('PlanetScene step error:', err);
+    }
 
     this.simAccum += dt;
     if (this.simAccum >= 0.25) {

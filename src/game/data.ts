@@ -45,7 +45,10 @@ export type MetaUpgradeId =
   | 'timberMastery'
   | 'sacredGroves'
   | 'ironDiscipline'
+  | 'unlockTemple'
   | 'zealotSermons'
+  | 'unlockFireWarriors'
+  | 'unlockGuardhouse'
   | 'watchtowerPrecision'
   | 'soulAnchor'
   | 'tributeOfBlood'
@@ -66,7 +69,7 @@ export interface MetaUpgradeConfig {
 }
 
 export const PLANETS: PlanetConfig[] = [
-  { id: 1, name: 'Kaelis I: Dawn Plains', mode: 'shaman', rivals: ['red'], theme: 'Mainland Plains', groundColor: 0x3b6e3c, waterColor: 0x1d4e89, initialEnemyPop: 14, initialEnemyHuts: 4, swarmStrength: 1 },
+  { id: 1, name: 'Kaelis I: Dawn Plains', mode: 'shaman', rivals: ['red'], theme: 'Mainland Plains', groundColor: 0x3b6e3c, waterColor: 0x1d4e89, initialEnemyPop: 8, initialEnemyHuts: 2, swarmStrength: 1 },
   { id: 2, name: 'Kaelis II: Red Ridge', mode: 'shaman', rivals: ['red'], theme: 'Ridge & Valley', groundColor: 0x5c6b3c, waterColor: 0x1d4e89, initialEnemyPop: 24, initialEnemyHuts: 6, swarmStrength: 2 },
   { id: 3, name: 'Kaelis III: Azure Bay', mode: 'shaman', rivals: ['yellow'], theme: 'Coastal Bay', groundColor: 0x4b7752, waterColor: 0x1a659e, initialEnemyPop: 32, initialEnemyHuts: 8, swarmStrength: 3 },
   { id: 4, name: 'Kaelis IV: Mirefen', mode: 'shaman', rivals: ['green'], theme: 'Marshlands', groundColor: 0x3a5a40, waterColor: 0x264653, initialEnemyPop: 42, initialEnemyHuts: 10, swarmStrength: 4 },
@@ -129,8 +132,11 @@ export const META_UPGRADES: MetaUpgradeConfig[] = [
   { id: 'timberMastery', name: 'Timber Mastery', parent: 'popCap', x: 275, y: 505, baseCost: 9, costScale: 1.6, maxLevel: 12, description: '+18% Brave chopping & building speed.' },
   { id: 'sacredGroves', name: 'Sacred Groves', parent: 'timberMastery', x: 135, y: 465, baseCost: 16, costScale: 1.7, maxLevel: 5, description: '-15% tree regrowth time.' },
   { id: 'ironDiscipline', name: 'Iron Discipline', parent: 'popCap', x: 355, y: 635, baseCost: 12, costScale: 1.65, maxLevel: 15, description: '+20% Warrior HP and melee damage.' },
-  { id: 'zealotSermons', name: 'Zealot Sermons', parent: 'ironDiscipline', x: 205, y: 660, baseCost: 18, costScale: 1.7, maxLevel: 10, description: '+20% Preacher conversion speed.' },
-  { id: 'watchtowerPrecision', name: 'Watchtower Sight', parent: 'ironDiscipline', x: 455, y: 725, baseCost: 20, costScale: 1.7, maxLevel: 8, description: '+25% Guard Tower fireball range.' },
+  { id: 'unlockTemple', name: 'Sacred Priesthood', parent: 'popCap', x: 225, y: 615, baseCost: 10, costScale: 1.0, maxLevel: 1, description: 'Unlocks the Temple building to train Preachers.' },
+  { id: 'zealotSermons', name: 'Zealot Sermons', parent: 'unlockTemple', x: 120, y: 690, baseCost: 18, costScale: 1.7, maxLevel: 10, description: '+20% Preacher conversion speed.' },
+  { id: 'unlockFireWarriors', name: 'Flame Forges', parent: 'ironDiscipline', x: 470, y: 695, baseCost: 16, costScale: 1.0, maxLevel: 1, description: 'Unlocks the Fire Warrior Hut to train fireball casters.' },
+  { id: 'unlockGuardhouse', name: 'Watchtower Sanctum', parent: 'unlockFireWarriors', x: 580, y: 745, baseCost: 20, costScale: 1.0, maxLevel: 1, description: 'Unlocks Guardhouses to boost Fire Warrior, Shaman & Preacher range.' },
+  { id: 'watchtowerPrecision', name: 'Watchtower Sight', parent: 'unlockGuardhouse', x: 690, y: 760, baseCost: 22, costScale: 1.7, maxLevel: 8, description: '+25% Guardhouse fireball range.' },
 
   // Bough 4: Way of Divinity (lower-right)
   { id: 'soulAnchor', name: 'Soul Anchor', x: 770, y: 495, baseCost: 8, costScale: 1.65, maxLevel: 5, description: '-150 Mana lost on Shaman death & faster reincarnation.' },

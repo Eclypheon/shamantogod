@@ -43,12 +43,13 @@ export interface GameState {
   selectedSpellId: string;
   spellCooldowns: Record<string, number>;
   activeBuffs: Record<string, number>;
+  tutorialStep: number;
   muted: boolean;
   metaLevels: Record<MetaUpgradeId, number>;
   planets: Record<number, PlanetProgress>;
 }
 
-const SAVE_KEY = 'shamantogod_save_v3';
+const SAVE_KEY = 'shamantogod_save_v4';
 
 function createDefaultMetaLevels(): Record<MetaUpgradeId, number> {
   const levels = {} as Record<MetaUpgradeId, number>;
@@ -56,11 +57,11 @@ function createDefaultMetaLevels(): Record<MetaUpgradeId, number> {
   return levels;
 }
 
-export const BUILDING_COSTS = {
-  warrior_hut: 120,
-  temple: 220,
-  firewarrior_hut: 350,
-  guard_tower: 180,
+export const BUILDING_FOLLOWER_REQS = {
+  warrior_hut: 4,
+  temple: 8,
+  firewarrior_hut: 12,
+  guard_tower: 14,
 } as const;
 
 export function createPlanetProgress(cfg: PlanetConfig, unlocked: boolean): PlanetProgress {
@@ -98,7 +99,7 @@ export function createInitialState(now = Date.now()): GameState {
     planets[cfg.id] = createPlanetProgress(cfg, cfg.id === 1);
   }
   return {
-    version: 3,
+    version: 4,
     activePlanetId: 1,
     mana: 60,
     divineEssence: 0,
@@ -109,6 +110,7 @@ export function createInitialState(now = Date.now()): GameState {
     selectedSpellId: 'convert',
     spellCooldowns: {},
     activeBuffs: {},
+    tutorialStep: 0,
     muted: false,
     metaLevels: createDefaultMetaLevels(),
     planets,
@@ -241,7 +243,7 @@ export function isSpellUnlocked(state: GameState, spell: SpellConfig): boolean {
   return true;
 }
 
-/** Order a training building or guard tower; Braves place & build its blueprint from chopped wood. */
+/** Order a training building or guardhouse based on follower count + Pantheon unlocks (no Mana mismatch!). */
 export function orderBuilding(
   state: GameState,
   planetId: number,
@@ -252,30 +254,28 @@ export function orderBuilding(
 
   if (kind === 'warrior_hut') {
     if (p.warriorHutOrdered || p.warriorHutBuilt || p.hutsBuilt < 1) return false;
-    if (state.mana < BUILDING_COSTS.warrior_hut) return false;
-    state.mana -= BUILDING_COSTS.warrior_hut;
+    if (p.loyalPop < BUILDING_FOLLOWER_REQS.warrior_hut) return false;
     p.warriorHutOrdered = true;
     return true;
   }
   if (kind === 'temple') {
+    if (state.metaLevels.unlockTemple <= 0) return false;
     if (p.templeOrdered || p.templeBuilt || !p.warriorHutBuilt) return false;
-    if (state.mana < BUILDING_COSTS.temple) return false;
-    state.mana -= BUILDING_COSTS.temple;
+    if (p.loyalPop < BUILDING_FOLLOWER_REQS.temple) return false;
     p.templeOrdered = true;
     return true;
   }
   if (kind === 'firewarrior_hut') {
+    if (state.metaLevels.unlockFireWarriors <= 0) return false;
     if (p.fireWarriorHutOrdered || p.fireWarriorHutBuilt || !p.templeBuilt) return false;
-    if (state.mana < BUILDING_COSTS.firewarrior_hut) return false;
-    state.mana -= BUILDING_COSTS.firewarrior_hut;
+    if (p.loyalPop < BUILDING_FOLLOWER_REQS.firewarrior_hut) return false;
     p.fireWarriorHutOrdered = true;
     return true;
   }
   if (kind === 'guard_tower') {
+    if (state.metaLevels.unlockGuardhouse <= 0) return false;
     if (p.towersOrdered >= 4 || !p.fireWarriorHutBuilt) return false;
-    const cost = BUILDING_COSTS.guard_tower * (p.towersOrdered + 1);
-    if (state.mana < cost) return false;
-    state.mana -= cost;
+    if (p.loyalPop < BUILDING_FOLLOWER_REQS.guard_tower) return false;
     p.towersOrdered += 1;
     return true;
   }
@@ -588,7 +588,7 @@ export function hydrateState(raw: unknown): GameState {
   const base = createInitialState();
   if (!raw || typeof raw !== 'object') return base;
   const parsed = raw as Partial<GameState>;
-  if (parsed.version !== 3 || !parsed.planets) return base;
+  if (parsed.version !== 4 || !parsed.planets) return base;
   const mergedPlanets: Record<number, PlanetProgress> = {};
   for (const cfg of PLANETS) {
     mergedPlanets[cfg.id] = {

@@ -61,10 +61,14 @@ describe('Shaman to God simulation', () => {
     expect(state.planets[1].warriors).toBe(1);
     expect(state.planets[1].braves).toBe(6);
 
-    // Guardhouse requires Fire Warrior Hut first
+    // Guardhouse requires Pantheon unlock + Fire Warrior Hut + 14 followers
     expect(orderBuilding(state, 1, 'guard_tower')).toBe(false);
+    state.metaLevels.unlockTemple = 1;
+    state.metaLevels.unlockFireWarriors = 1;
+    state.metaLevels.unlockGuardhouse = 1;
     onBuildingConstructed(state, 'temple');
     onBuildingConstructed(state, 'firewarrior_hut');
+    for (let i = 0; i < 8; i++) onWildmanConverted(state); // reach >= 14 followers
     expect(orderBuilding(state, 1, 'guard_tower')).toBe(true);
   });
 
@@ -142,7 +146,7 @@ describe('Shaman to God simulation', () => {
 
   it('safely hydrates partial or older saved states without missing planets', () => {
     const hydrated = hydrateState({
-      version: 3,
+      version: 4,
       mana: 321,
       planets: { 1: { planetId: 1, unlocked: true, hutsBuilt: 3 } },
     });

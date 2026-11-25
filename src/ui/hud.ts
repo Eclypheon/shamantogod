@@ -1,6 +1,6 @@
 import { META_UPGRADES, PLANETS, SPELLS, type MetaUpgradeConfig } from '../game/data';
 import {
-  BUILDING_COSTS,
+  BUILDING_FOLLOWER_REQS,
   buyMetaUpgrade,
   computeDominance,
   formAlliance,
@@ -37,6 +37,7 @@ export class HudController {
   private activeTab: DrawerTab = 'none';
   private titleOpen = true;
   private pantheonOpen = false;
+  private tutorialOpen = false;
   private confirmRestart = false;
   private victoryDismissed = false;
   private selectedMetaId: MetaUpgradeConfig['id'] = 'startingMana';
@@ -47,6 +48,7 @@ export class HudController {
   private onJoystick: (x: number, y: number) => void;
   private onResetState: (fresh: GameState) => void;
   private onBeginPlay: () => void;
+  private onSetPaused: (paused: boolean) => void;
   private deferredInstallPrompt: BeforeInstallPromptEvent | null = null;
   private installDismissed = false;
   private lastSpellSignature = '';
@@ -69,19 +71,22 @@ export class HudController {
   private elInstallBanner!: HTMLElement;
   private elTitleScreen!: HTMLElement;
   private elPantheonModal!: HTMLElement;
+  private elTutorialModal!: HTMLElement;
 
   constructor(
     root: HTMLElement,
     state: GameState,
     onJoystick: (x: number, y: number) => void,
     onResetState: (fresh: GameState) => void,
-    onBeginPlay: () => void
+    onBeginPlay: () => void,
+    onSetPaused: (paused: boolean) => void
   ) {
     this.root = root;
     this.state = state;
     this.onJoystick = onJoystick;
     this.onResetState = onResetState;
     this.onBeginPlay = onBeginPlay;
+    this.onSetPaused = onSetPaused;
 
     this.mountShell();
 
@@ -153,6 +158,7 @@ export class HudController {
 
       <section class="title-screen open" id="hud-title"></section>
       <section class="pantheon-modal" id="hud-pantheon"></section>
+      <section class="tutorial-modal" id="hud-tutorial"></section>
 
       <div class="landscape-overlay" id="hud-rotate">
         <div style="font-size:38px;">&#8635;</div>
@@ -178,6 +184,12 @@ export class HudController {
     this.elInstallBanner = this.root.querySelector('#hud-install')!;
     this.elTitleScreen = this.root.querySelector('#hud-title')!;
     this.elPantheonModal = this.root.querySelector('#hud-pantheon')!;
+    this.elTutorialModal = this.root.querySelector('#hud-tutorial')!;
+
+    // Prevent any HUD tap from leaking into Phaser canvas input
+    for (const sel of ['.top-ribbon', '.scroll-drawer', '.spell-dock', '.title-screen', '.pantheon-modal', '.tutorial-modal']) {
+      this.root.querySelector(sel)?.addEventListener('pointerdown', (e) => e.stopPropagation());
+    }
 
     this.elTabBtns.forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -192,12 +204,14 @@ export class HudController {
       this.activeTab = 'none';
       this.syncTabs();
       this.pantheonOpen = true;
+      this.updatePauseState();
       this.renderPantheon();
     });
 
     this.root.querySelector('#hud-open-menu')!.addEventListener('click', () => {
       this.confirmRestart = false;
       this.titleOpen = true;
+      this.updatePauseState();
       this.renderTitleScreen();
     });
 
@@ -255,7 +269,21 @@ export class HudController {
     this.elTitleScreen.querySelector('#btn-start-game')?.addEventListener('click', () => {
       this.titleOpen = false;
       this.elTitleScreen.classList.remove('open');
-      this.onBeginPlay();
+      this.updatePauseState();
+      if (this.state.activePlanetId === 1 && this.state.tutorialStep === 0) {
+        this.showTutorial(
+          'Step I: Convert Followers',
+          'You begin as a lone Shaman. Cast Convert around the 6 nearby Wildmen to turn them into loyal Braves. Once converted, they will automatically chop trees and build your first Hut.',
+          'Cast Convert',
+          () => {
+            this.state.tutorialStep = 1;
+            saveGame(this.state);
+            this.onBeginPlay();
+          }
+        );
+      } else {
+        this.onBeginPlay();
+      }
       this.sync();
     });
 
@@ -288,8 +316,17 @@ export class HudController {
       this.titleOpen = false;
       this.victoryDismissed = false;
       this.elTitleScreen.classList.remove('open');
-      this.onBeginPlay();
-      this.showToast('New Conquest Begun');
+      this.updatePauseState();
+      this.showTutorial(
+        'Step I: Convert Followers',
+        'You begin as a lone Shaman. Cast Convert around the 6 nearby Wildmen to turn them into loyal Braves. Once converted, they will automatically chop trees and build your first Hut.',
+        'Cast Convert',
+        () => {
+          this.state.tutorialStep = 1;
+          saveGame(this.state);
+          this.onBeginPlay();
+        }
+      );
       this.sync();
     });
 
@@ -438,6 +475,7 @@ export class HudController {
     this.elPantheonModal.querySelector('#btn-close-pantheon')?.addEventListener('click', () => {
       this.pantheonOpen = false;
       this.elPantheonModal.classList.remove('open');
+      this.updatePauseState();
     });
 
     this.elPantheonModal.querySelectorAll<HTMLButtonElement>('[data-pnode]').forEach((btn) => {
@@ -511,6 +549,74 @@ export class HudController {
     zone.addEventListener('pointercancel', endDrag);
   }
 
+  private updatePauseState(): void {
+    this.onSetPaused(this.titleOpen || this.pantheonOpen || this.tutorialOpen);
+  }
+
+  private showTutorial(title: string, body: string, btnLabel: string, onAccept: () => void): void {
+    this.tutorialOpen = true;
+    this.updatePauseState();
+    this.elTutorialModal.innerHTML = `
+      <div class="papyrus tutorial-card">
+        <h3>${title}</h3>
+        <p>${body}</p>
+        <div style="margin-top:4px;">
+          <button class="btn ascend" id="btn-tut-ok">${btnLabel}</button>
+        </div>
+      </div>
+    `;
+    this.elTutorialModal.classList.add('open');
+    this.elTutorialModal.querySelector('#btn-tut-ok')?.addEventListener('click', () => {
+      this.tutorialOpen = false;
+      this.elTutorialModal.classList.remove('open');
+      this.updatePauseState();
+      onAccept();
+    });
+  }
+
+  private checkTutorialMilestone(): void {
+    if (this.titleOpen || this.pantheonOpen || this.tutorialOpen) return;
+    const p1 = this.state.planets[1];
+    if (this.state.activePlanetId !== 1) return;
+
+    if (this.state.tutorialStep === 1 && p1.loyalPop >= 3) {
+      this.showTutorial(
+        'Step II: Blast Spell Unlocked',
+        'You now have Blast in your bottom spell dock! Select Blast and tap enemy forces to launch them into the air. You will unlock 18 more spells as you conquer the Kaelis System.',
+        'Select Blast',
+        () => {
+          this.state.tutorialStep = 2;
+          this.state.selectedSpellId = 'blast';
+          saveGame(this.state);
+          this.syncSpells();
+        }
+      );
+    } else if (this.state.tutorialStep === 2 && p1.hutsBuilt >= 1 && p1.loyalPop >= BUILDING_FOLLOWER_REQS.warrior_hut && !p1.warriorHutOrdered) {
+      this.showTutorial(
+        'Step III: Warrior Training Hut',
+        'Your village reached 4 followers! Open Tribe in the top bar and order the Warrior Training Hut. Braves will build it and enter inside to train into strong Warriors.',
+        'Open Tribe Menu',
+        () => {
+          this.state.tutorialStep = 3;
+          saveGame(this.state);
+          this.activeTab = 'tribe';
+          this.renderDrawer();
+          this.syncTabs();
+        }
+      );
+    } else if (this.state.tutorialStep === 3 && this.state.planets[2]?.unlocked) {
+      this.showTutorial(
+        'Step IV: Ascend & Pantheon',
+        'Planet I is conquered! Tap Ascend II in the top bar to Prestige to Planet II, bank your Divine Essence, and unlock Temples (Preachers), Fire Warriors, and Guardhouses in the Pantheon.',
+        'Got it',
+        () => {
+          this.state.tutorialStep = 4;
+          saveGame(this.state);
+        }
+      );
+    }
+  }
+
   showToast(msg: string): void {
     this.elToast.textContent = msg;
     this.elToast.classList.add('visible');
@@ -564,6 +670,7 @@ export class HudController {
 
     this.syncSpells();
     this.syncTabs();
+    this.checkTutorialMilestone();
   }
 
   private syncTabs(): void {
@@ -660,37 +767,51 @@ export class HudController {
 
     if (this.activeTab === 'tribe') {
       title = `Tribe Decrees · Planet ${ROMAN[cfg.id - 1] ?? cfg.id}`;
-      const towerCost = BUILDING_COSTS.guard_tower * (p.towersOrdered + 1);
+      const hasTempleUnlock = this.state.metaLevels.unlockTemple > 0;
+      const hasFireUnlock = this.state.metaLevels.unlockFireWarriors > 0;
+      const hasGuardUnlock = this.state.metaLevels.unlockGuardhouse > 0;
       body = `
         <div class="scroll-card">
-          Huts Built: <strong>${p.hutsBuilt}</strong> · Mana/sec: <strong>+${getPlanetManaPerSec(this.state, cfg.id).toFixed(1)}</strong><br/>
-          <small>${p.hutsBuilt < 3 ? 'Braves chop trees to raise Huts. At 3 Huts, pairs enter Huts to breed new Braves.' : 'Pairs of Braves breed inside Huts while others gather timber or fight.'}</small>
+          Huts: <strong>${p.hutsBuilt}</strong> · Followers: <strong>${p.loyalPop}</strong> · Mana/sec: <strong>+${getPlanetManaPerSec(this.state, cfg.id).toFixed(1)}</strong><br/>
+          <small>${p.hutsBuilt < 3 ? 'Braves chop trees to raise Huts (1 per 6 followers). At 3 Huts, pairs enter Huts to breed.' : 'Pairs of Braves breed in Huts while others train, repair, or fight.'}</small>
         </div>
         <div class="scroll-card" style="display:flex;flex-direction:column;gap:7px;">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
-            <div><strong>Warrior Training Hut</strong><br/><small>Trains Warriors who fight enemies</small></div>
-            <button class="btn ${p.warriorHutBuilt ? 'active' : ''}" ${p.warriorHutOrdered || p.warriorHutBuilt || p.hutsBuilt < 1 || this.state.mana < BUILDING_COSTS.warrior_hut ? 'disabled' : ''} data-order="warrior_hut">
-              ${p.warriorHutBuilt ? 'Built' : p.warriorHutOrdered ? 'Building...' : `${BUILDING_COSTS.warrior_hut} M`}
+            <div><strong>Warrior Training Hut</strong><br/><small>Requires 1 Hut &amp; ${BUILDING_FOLLOWER_REQS.warrior_hut} followers</small></div>
+            <button class="btn ${p.warriorHutBuilt ? 'active' : ''}" ${p.warriorHutOrdered || p.warriorHutBuilt || p.hutsBuilt < 1 || p.loyalPop < BUILDING_FOLLOWER_REQS.warrior_hut ? 'disabled' : ''} data-order="warrior_hut">
+              ${p.warriorHutBuilt ? 'Built' : p.warriorHutOrdered ? 'Building...' : 'Order'}
             </button>
           </div>
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
-            <div><strong>Temple</strong><br/><small>Trains Preachers who convert enemies</small></div>
-            <button class="btn ${p.templeBuilt ? 'active' : ''}" ${p.templeOrdered || p.templeBuilt || !p.warriorHutBuilt || this.state.mana < BUILDING_COSTS.temple ? 'disabled' : ''} data-order="temple">
-              ${p.templeBuilt ? 'Built' : p.templeOrdered ? 'Building...' : `${BUILDING_COSTS.temple} M`}
-            </button>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
-            <div><strong>Fire Warrior Hut</strong><br/><small>Trains ranged fireball casters</small></div>
-            <button class="btn ${p.fireWarriorHutBuilt ? 'active' : ''}" ${p.fireWarriorHutOrdered || p.fireWarriorHutBuilt || !p.templeBuilt || this.state.mana < BUILDING_COSTS.firewarrior_hut ? 'disabled' : ''} data-order="firewarrior_hut">
-              ${p.fireWarriorHutBuilt ? 'Built' : p.fireWarriorHutOrdered ? 'Building...' : `${BUILDING_COSTS.firewarrior_hut} M`}
-            </button>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
-            <div><strong>Guardhouse (${p.towersBuilt}/4)</strong><br/><small>Enhances Fire Warrior, Shaman &amp; Preacher range</small></div>
-            <button class="btn" ${p.towersOrdered >= 4 || !p.fireWarriorHutBuilt || this.state.mana < towerCost ? 'disabled' : ''} data-order="guard_tower">
-              ${p.towersBuilt >= 4 ? 'Maxed' : p.towersOrdered > p.towersBuilt ? 'Building...' : !p.fireWarriorHutBuilt ? 'Need Fire Hut' : `${towerCost} M`}
-            </button>
-          </div>
+          ${
+            hasTempleUnlock
+              ? `<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
+                  <div><strong>Temple (Preachers)</strong><br/><small>Requires Warrior Hut &amp; ${BUILDING_FOLLOWER_REQS.temple} followers</small></div>
+                  <button class="btn ${p.templeBuilt ? 'active' : ''}" ${p.templeOrdered || p.templeBuilt || !p.warriorHutBuilt || p.loyalPop < BUILDING_FOLLOWER_REQS.temple ? 'disabled' : ''} data-order="temple">
+                    ${p.templeBuilt ? 'Built' : p.templeOrdered ? 'Building...' : 'Order'}
+                  </button>
+                </div>`
+              : `<div style="font-size:11px;opacity:0.7;">Temple, Fire Warriors &amp; Guardhouses unlock in the <strong>Pantheon</strong> tree.</div>`
+          }
+          ${
+            hasFireUnlock
+              ? `<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
+                  <div><strong>Fire Warrior Hut</strong><br/><small>Requires Temple &amp; ${BUILDING_FOLLOWER_REQS.firewarrior_hut} followers</small></div>
+                  <button class="btn ${p.fireWarriorHutBuilt ? 'active' : ''}" ${p.fireWarriorHutOrdered || p.fireWarriorHutBuilt || !p.templeBuilt || p.loyalPop < BUILDING_FOLLOWER_REQS.firewarrior_hut ? 'disabled' : ''} data-order="firewarrior_hut">
+                    ${p.fireWarriorHutBuilt ? 'Built' : p.fireWarriorHutOrdered ? 'Building...' : 'Order'}
+                  </button>
+                </div>`
+              : ''
+          }
+          ${
+            hasGuardUnlock
+              ? `<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
+                  <div><strong>Guardhouse (${p.towersBuilt}/4)</strong><br/><small>Requires Fire Hut &amp; ${BUILDING_FOLLOWER_REQS.guard_tower} followers</small></div>
+                  <button class="btn" ${p.towersOrdered >= 4 || !p.fireWarriorHutBuilt || p.loyalPop < BUILDING_FOLLOWER_REQS.guard_tower ? 'disabled' : ''} data-order="guard_tower">
+                    ${p.towersBuilt >= 4 ? 'Maxed' : p.towersOrdered > p.towersBuilt ? 'Building...' : 'Order'}
+                  </button>
+                </div>`
+              : ''
+          }
         </div>
         ${
           cfg.allianceTribe && cfg.allianceCost

@@ -615,6 +615,47 @@ html, body, #app, #game-container {
   color: var(--laurel);
 }
 
+.tutorial-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 10, 6, 0.62);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: var(--safe-t) var(--safe-r) var(--safe-b) var(--safe-l);
+  pointer-events: auto;
+  z-index: 46;
+}
+
+.tutorial-modal.open {
+  display: flex;
+}
+
+.tutorial-card {
+  width: min(410px, 90vw);
+  border-radius: 8px;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: center;
+}
+
+.tutorial-card h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 14px;
+  letter-spacing: 0.06em;
+  color: var(--ink);
+}
+
+.tutorial-card p {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.35;
+  color: var(--ink-soft);
+}
+
 .install-banner {
   position: fixed;
   left: 50%;
