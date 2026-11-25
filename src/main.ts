@@ -28,7 +28,7 @@ if (offline.manaGained >= 1) {
 
 sceneRef = new PlanetScene(
   state,
-  () => hud.render(),
+  () => hud.sync(),
   (msg) => hud.showToast(msg)
 );
 

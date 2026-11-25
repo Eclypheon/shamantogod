@@ -21,7 +21,6 @@ export interface PlanetProgress {
   preachers: number;
   warriors: number;
   fireWarriors: number;
-  spiesEnabled: boolean;
   towersBuilt: number;
   allied: boolean;
   swarmKills: number;
@@ -37,6 +36,7 @@ export interface GameState {
   lastSavedAt: number;
   selectedSpellId: string;
   spellCooldowns: Record<string, number>;
+  activeBuffs: Record<string, number>;
   ratios: UnitRatios;
   autoBuild: boolean;
   muted: boolean;
@@ -61,7 +61,6 @@ export function createPlanetProgress(cfg: PlanetConfig, unlocked: boolean): Plan
     preachers: 0,
     warriors: 0,
     fireWarriors: 0,
-    spiesEnabled: false,
     towersBuilt: 0,
     allied: false,
     swarmKills: 0,
@@ -83,6 +82,7 @@ export function createInitialState(now = Date.now()): GameState {
     lastSavedAt: now,
     selectedSpellId: 'convert',
     spellCooldowns: {},
+    activeBuffs: {},
     ratios: { brave: 40, preacher: 20, warrior: 25, fireWarrior: 15 },
     autoBuild: true,
     muted: false,
@@ -220,6 +220,8 @@ export function castSpell(
       p.passiveDestruction += hutsDown;
       destroyed = hutsDown;
     }
+  } else if (spell.kind === 'buff') {
+    state.activeBuffs[spell.id] = 12;
   }
 
   rebalanceUnits(state, p);
@@ -258,6 +260,16 @@ export function updateDominanceAndUnlocks(state: GameState, p: PlanetProgress): 
   }
 }
 
+export function buildGuardTower(state: GameState, planetId: number): boolean {
+  const p = state.planets[planetId];
+  if (!p || !p.unlocked || p.towersBuilt >= 4) return false;
+  const cost = 150 * (p.towersBuilt + 1);
+  if (state.mana < cost) return false;
+  state.mana -= cost;
+  p.towersBuilt += 1;
+  return true;
+}
+
 export function formAlliance(state: GameState, planetId: number): boolean {
   const cfg = getPlanetConfig(planetId);
   const p = state.planets[planetId];
@@ -286,8 +298,15 @@ export function stepSimulation(state: GameState, dtSec: number): void {
   for (const id of Object.keys(state.spellCooldowns)) {
     state.spellCooldowns[id] = Math.max(0, state.spellCooldowns[id] - dtSec);
   }
+  for (const id of Object.keys(state.activeBuffs)) {
+    state.activeBuffs[id] = Math.max(0, state.activeBuffs[id] - dtSec);
+  }
 
   state.mana += getTotalManaPerSec(state) * dtSec;
+
+  const bloodlustMult = (state.activeBuffs.bloodlust ?? 0) > 0 ? 2 : 1;
+  const invisBonus = (state.activeBuffs.invisibility ?? 0) > 0 ? 1.5 : 1;
+  const shieldActive = (state.activeBuffs.shield ?? 0) > 0;
 
   // Step all unlocked planets
   for (const cfg of PLANETS) {
@@ -310,7 +329,10 @@ export function stepSimulation(state: GameState, dtSec: number): void {
     }
 
     // Followers convert/attack enemies
-    const attackPower = (p.preachers * 0.4 + p.warriors * 0.55 + p.fireWarriors * 0.8 + p.towersBuilt * 0.7) * rate;
+    const attackPower =
+      (p.preachers * 0.4 * invisBonus + p.warriors * 0.55 + p.fireWarriors * 0.8 + p.towersBuilt * 0.7) *
+      bloodlustMult *
+      rate;
     if (attackPower > 0 && Math.random() < Math.min(0.8, attackPower * 0.04 * dtSec)) {
       if (p.enemyPop > 0) {
         p.enemyPop -= 1;
@@ -355,8 +377,8 @@ export function stepSimulation(state: GameState, dtSec: number): void {
       }
     }
 
-    // Endless Swarm pressure on active planet
-    if (isActive && Math.random() < 0.08 * cfg.swarmStrength * dtSec) {
+    // Endless Swarm pressure on active planet (blocked while Shield buff is active)
+    if (isActive && !shieldActive && Math.random() < 0.08 * cfg.swarmStrength * dtSec) {
       if (p.loyalPop > 3 && p.warriors + p.fireWarriors < cfg.swarmStrength) {
         p.loyalPop -= 1;
         rebalanceUnits(state, p);
@@ -389,13 +411,34 @@ export function saveGame(state: GameState): void {
   }
 }
 
+export function hydrateState(raw: unknown): GameState {
+  const base = createInitialState();
+  if (!raw || typeof raw !== 'object') return base;
+  const parsed = raw as Partial<GameState>;
+  if (parsed.version !== 1 || !parsed.planets) return base;
+  const mergedPlanets: Record<number, PlanetProgress> = {};
+  for (const cfg of PLANETS) {
+    mergedPlanets[cfg.id] = {
+      ...base.planets[cfg.id],
+      ...(parsed.planets[cfg.id] ?? {}),
+    };
+  }
+  return {
+    ...base,
+    ...parsed,
+    metaLevels: { ...base.metaLevels, ...(parsed.metaLevels ?? {}) },
+    ratios: { ...base.ratios, ...(parsed.ratios ?? {}) },
+    spellCooldowns: { ...(parsed.spellCooldowns ?? {}) },
+    activeBuffs: { ...(parsed.activeBuffs ?? {}) },
+    planets: mergedPlanets,
+  };
+}
+
 export function loadGame(): GameState {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
     if (!raw) return createInitialState();
-    const parsed = JSON.parse(raw) as GameState;
-    if (!parsed || parsed.version !== 1 || !parsed.planets) return createInitialState();
-    return parsed;
+    return hydrateState(JSON.parse(raw));
   } catch {
     return createInitialState();
   }

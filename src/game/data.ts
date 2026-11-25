@@ -13,7 +13,6 @@ export interface PlanetConfig {
   initialEnemyPop: number;
   initialEnemyHuts: number;
   swarmStrength: number;
-  unlocksSpell?: string;
 }
 
 export interface SpellConfig {
@@ -40,19 +39,19 @@ export interface MetaUpgradeConfig {
 }
 
 export const PLANETS: PlanetConfig[] = [
-  { id: 1, name: 'Kaelis I: Dawn Plains', mode: 'shaman', rivals: ['red'], theme: 'Mainland Plains', groundColor: 0x3b6e3c, waterColor: 0x1d4e89, initialEnemyPop: 14, initialEnemyHuts: 4, swarmStrength: 1, unlocksSpell: 'convert' },
-  { id: 2, name: 'Kaelis II: Red Ridge', mode: 'shaman', rivals: ['red'], theme: 'Ridge & Valley', groundColor: 0x5c6b3c, waterColor: 0x1d4e89, initialEnemyPop: 24, initialEnemyHuts: 6, swarmStrength: 2, unlocksSpell: 'swarm' },
-  { id: 3, name: 'Kaelis III: Azure Bay', mode: 'shaman', rivals: ['yellow'], theme: 'Coastal Bay', groundColor: 0x4b7752, waterColor: 0x1a659e, initialEnemyPop: 32, initialEnemyHuts: 8, swarmStrength: 3, unlocksSpell: 'lightning' },
-  { id: 4, name: 'Kaelis IV: Mirefen', mode: 'shaman', rivals: ['green'], theme: 'Marshlands', groundColor: 0x3a5a40, waterColor: 0x264653, initialEnemyPop: 42, initialEnemyHuts: 10, swarmStrength: 4, unlocksSpell: 'swamp' },
-  { id: 5, name: 'Kaelis V: Twin Isles', mode: 'shaman', rivals: ['yellow', 'red'], allianceTribe: 'yellow', allianceCost: 450, theme: 'Twin Islands', groundColor: 0x588157, waterColor: 0x184e77, initialEnemyPop: 56, initialEnemyHuts: 12, swarmStrength: 6, unlocksSpell: 'landbridge' },
-  { id: 6, name: 'Kaelis VI: Mist Crags', mode: 'shaman', rivals: ['green'], theme: 'Misty Crags', groundColor: 0x4f5d75, waterColor: 0x22333b, initialEnemyPop: 70, initialEnemyHuts: 14, swarmStrength: 8, unlocksSpell: 'flatten' },
-  { id: 7, name: 'Kaelis VII: Rift Divide', mode: 'shaman', rivals: ['red', 'green'], allianceTribe: 'green', allianceCost: 1100, theme: 'Continental Divide', groundColor: 0x6b705c, waterColor: 0x1d3557, initialEnemyPop: 90, initialEnemyHuts: 17, swarmStrength: 10, unlocksSpell: 'tornado' },
-  { id: 8, name: 'Kaelis VIII: Sunken Shoals', mode: 'shaman', rivals: ['yellow', 'green'], allianceTribe: 'yellow', allianceCost: 1800, theme: 'Archipelago', groundColor: 0x4a7c59, waterColor: 0x144552, initialEnemyPop: 115, initialEnemyHuts: 20, swarmStrength: 13, unlocksSpell: 'erode' },
-  { id: 9, name: 'Kaelis IX: Iron Peaks', mode: 'shaman', rivals: ['red', 'yellow'], allianceTribe: 'yellow', allianceCost: 2600, theme: 'Fortress Peaks', groundColor: 0x6c584c, waterColor: 0x1b263b, initialEnemyPop: 145, initialEnemyHuts: 24, swarmStrength: 17, unlocksSpell: 'earthquake' },
-  { id: 10, name: 'Kaelis X: Threefold Basin', mode: 'shaman', rivals: ['red', 'green', 'yellow'], allianceTribe: 'green', allianceCost: 3800, theme: 'Middle Ground', groundColor: 0x5e503f, waterColor: 0x22333b, initialEnemyPop: 180, initialEnemyHuts: 28, swarmStrength: 22, unlocksSpell: 'hypnotise' },
-  { id: 11, name: 'Kaelis XI: Fractured Crust', mode: 'shaman', rivals: ['red', 'green', 'yellow'], allianceTribe: 'yellow', allianceCost: 5500, theme: 'Fractured Earth', groundColor: 0x5c3c3c, waterColor: 0x370617, initialEnemyPop: 220, initialEnemyHuts: 32, swarmStrength: 28, unlocksSpell: 'firestorm' },
-  { id: 12, name: 'Kaelis XII: Astral Reef', mode: 'junior-god', rivals: ['red', 'green', 'yellow'], allianceTribe: 'green', allianceCost: 8000, theme: 'Endless Archipelago', groundColor: 0x3d405b, waterColor: 0x14213d, initialEnemyPop: 280, initialEnemyHuts: 38, swarmStrength: 36, unlocksSpell: 'angel' },
-  { id: 13, name: 'Kaelis XIII: Cinder Core', mode: 'junior-god', rivals: ['red', 'green', 'yellow'], theme: 'Inferno', groundColor: 0x6a040f, waterColor: 0x370617, initialEnemyPop: 360, initialEnemyHuts: 45, swarmStrength: 46, unlocksSpell: 'volcano' },
+  { id: 1, name: 'Kaelis I: Dawn Plains', mode: 'shaman', rivals: ['red'], theme: 'Mainland Plains', groundColor: 0x3b6e3c, waterColor: 0x1d4e89, initialEnemyPop: 14, initialEnemyHuts: 4, swarmStrength: 1 },
+  { id: 2, name: 'Kaelis II: Red Ridge', mode: 'shaman', rivals: ['red'], theme: 'Ridge & Valley', groundColor: 0x5c6b3c, waterColor: 0x1d4e89, initialEnemyPop: 24, initialEnemyHuts: 6, swarmStrength: 2 },
+  { id: 3, name: 'Kaelis III: Azure Bay', mode: 'shaman', rivals: ['yellow'], theme: 'Coastal Bay', groundColor: 0x4b7752, waterColor: 0x1a659e, initialEnemyPop: 32, initialEnemyHuts: 8, swarmStrength: 3 },
+  { id: 4, name: 'Kaelis IV: Mirefen', mode: 'shaman', rivals: ['green'], theme: 'Marshlands', groundColor: 0x3a5a40, waterColor: 0x264653, initialEnemyPop: 42, initialEnemyHuts: 10, swarmStrength: 4 },
+  { id: 5, name: 'Kaelis V: Twin Isles', mode: 'shaman', rivals: ['yellow', 'red'], allianceTribe: 'yellow', allianceCost: 450, theme: 'Twin Islands', groundColor: 0x588157, waterColor: 0x184e77, initialEnemyPop: 56, initialEnemyHuts: 12, swarmStrength: 6 },
+  { id: 6, name: 'Kaelis VI: Mist Crags', mode: 'shaman', rivals: ['green'], theme: 'Misty Crags', groundColor: 0x4f5d75, waterColor: 0x22333b, initialEnemyPop: 70, initialEnemyHuts: 14, swarmStrength: 8 },
+  { id: 7, name: 'Kaelis VII: Rift Divide', mode: 'shaman', rivals: ['red', 'green'], allianceTribe: 'green', allianceCost: 1100, theme: 'Continental Divide', groundColor: 0x6b705c, waterColor: 0x1d3557, initialEnemyPop: 90, initialEnemyHuts: 17, swarmStrength: 10 },
+  { id: 8, name: 'Kaelis VIII: Sunken Shoals', mode: 'shaman', rivals: ['yellow', 'green'], allianceTribe: 'yellow', allianceCost: 1800, theme: 'Archipelago', groundColor: 0x4a7c59, waterColor: 0x144552, initialEnemyPop: 115, initialEnemyHuts: 20, swarmStrength: 13 },
+  { id: 9, name: 'Kaelis IX: Iron Peaks', mode: 'shaman', rivals: ['red', 'yellow'], allianceTribe: 'yellow', allianceCost: 2600, theme: 'Fortress Peaks', groundColor: 0x6c584c, waterColor: 0x1b263b, initialEnemyPop: 145, initialEnemyHuts: 24, swarmStrength: 17 },
+  { id: 10, name: 'Kaelis X: Threefold Basin', mode: 'shaman', rivals: ['red', 'green', 'yellow'], allianceTribe: 'green', allianceCost: 3800, theme: 'Middle Ground', groundColor: 0x5e503f, waterColor: 0x22333b, initialEnemyPop: 180, initialEnemyHuts: 28, swarmStrength: 22 },
+  { id: 11, name: 'Kaelis XI: Fractured Crust', mode: 'shaman', rivals: ['red', 'green', 'yellow'], allianceTribe: 'yellow', allianceCost: 5500, theme: 'Fractured Earth', groundColor: 0x5c3c3c, waterColor: 0x370617, initialEnemyPop: 220, initialEnemyHuts: 32, swarmStrength: 28 },
+  { id: 12, name: 'Kaelis XII: Astral Reef', mode: 'junior-god', rivals: ['red', 'green', 'yellow'], allianceTribe: 'green', allianceCost: 8000, theme: 'Endless Archipelago', groundColor: 0x3d405b, waterColor: 0x14213d, initialEnemyPop: 280, initialEnemyHuts: 38, swarmStrength: 36 },
+  { id: 13, name: 'Kaelis XIII: Cinder Core', mode: 'junior-god', rivals: ['red', 'green', 'yellow'], theme: 'Inferno', groundColor: 0x6a040f, waterColor: 0x370617, initialEnemyPop: 360, initialEnemyHuts: 45, swarmStrength: 46 },
   { id: 14, name: 'Kaelis XIV: Dusk Zenith', mode: 'junior-god', rivals: ['red', 'green', 'yellow'], allianceTribe: 'yellow', allianceCost: 14000, theme: "Journey's End", groundColor: 0x4a2c40, waterColor: 0x1b1426, initialEnemyPop: 450, initialEnemyHuts: 54, swarmStrength: 60 },
   { id: 15, name: 'Kaelis XV: The Beginning', mode: 'junior-god', rivals: ['red', 'green', 'yellow'], theme: 'Apex Pantheon', groundColor: 0x2b2d42, waterColor: 0x0b090a, initialEnemyPop: 600, initialEnemyHuts: 68, swarmStrength: 80 },
 ];

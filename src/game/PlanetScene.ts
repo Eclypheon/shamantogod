@@ -43,6 +43,9 @@ export class PlanetScene extends Phaser.Scene {
   private castAnimTimer = 0;
   private currentPlanetRendered = -1;
   private renderedAllied = false;
+  private renderedHuts = -1;
+  private renderedEnemyHuts = -1;
+  private renderedTowers = -1;
   private simAccum = 0;
 
   constructor(state: GameState, onHudSync: () => void, onToast: (msg: string) => void) {
@@ -100,6 +103,8 @@ export class PlanetScene extends Phaser.Scene {
     }
 
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      const target = pointer.event.target as HTMLElement | null;
+      if (target && target.closest('#hud')) return;
       const worldPt = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
       this.handleCastAt(worldPt.x, worldPt.y);
     });
@@ -166,13 +171,23 @@ export class PlanetScene extends Phaser.Scene {
 
     const p = this.state.planets[cfg.id];
     this.renderedAllied = p.allied;
+    this.renderedHuts = Math.min(8, p.hutsBuilt);
+    this.renderedEnemyHuts = Math.min(12, p.enemyHutsRemaining);
+    this.renderedTowers = Math.min(4, p.towersBuilt);
     // Player Huts & Stone Head near center-left
-    const hutCount = Math.min(8, p.hutsBuilt);
+    const hutCount = this.renderedHuts;
     for (let i = 0; i < hutCount; i++) {
       const bx = WORLD_W * 0.42 + (i % 4) * 72 - 110;
       const by = WORLD_H * 0.48 + Math.floor(i / 4) * 62;
       this.buildingSprites.push(
         this.add.sprite(bx, by, 'world', `hut_${Math.min(3, 1 + (i % 3))}_blue`).setOrigin(0.5, 1).setDepth(by)
+      );
+    }
+    for (let i = 0; i < this.renderedTowers; i++) {
+      const tx = WORLD_W * 0.56 + (i % 2) * 58;
+      const ty = WORLD_H * 0.44 + Math.floor(i / 2) * 86;
+      this.buildingSprites.push(
+        this.add.sprite(tx, ty, 'world', 'guard_tower_blue').setOrigin(0.5, 1).setDepth(ty)
       );
     }
     this.buildingSprites.push(this.add.sprite(WORLD_W * 0.36, WORLD_H * 0.44, 'world', 'temple_blue').setOrigin(0.5, 1).setDepth(440));
@@ -299,7 +314,13 @@ export class PlanetScene extends Phaser.Scene {
   update(_time: number, deltaMs: number): void {
     const dt = deltaMs / 1000;
     const activeP = this.state.planets[this.state.activePlanetId];
-    if (this.currentPlanetRendered !== this.state.activePlanetId || this.renderedAllied !== activeP.allied) {
+    if (
+      this.currentPlanetRendered !== this.state.activePlanetId ||
+      this.renderedAllied !== activeP.allied ||
+      this.renderedHuts !== Math.min(8, activeP.hutsBuilt) ||
+      this.renderedEnemyHuts !== Math.min(12, activeP.enemyHutsRemaining) ||
+      this.renderedTowers !== Math.min(4, activeP.towersBuilt)
+    ) {
       this.rebuildPlanetVisuals();
     }
 
