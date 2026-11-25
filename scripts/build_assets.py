@@ -150,48 +150,123 @@ def build_unit_atlas(zf: zipfile.ZipFile):
 
 
 def draw_iso_hut(tribe_rgb: tuple[int, int, int], level: int, kind: str = "hut") -> Image.Image:
-    """Generate palette-matched isometric pixel sprite for buildings."""
-    w, h = 56, 56
+    """Generate Populous-authentic isometric huts (fenced yard, cream plaster, tribe mural, brown shingle roof, turret)."""
+    w, h = 72, 72
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     tr, tg, tb = tribe_rgb
-    wood_dark = (96, 64, 38, 255)
-    wood_light = (145, 98, 56, 255)
-    roof_base = (min(255, tr // 2 + 70), min(255, tg // 2 + 55), min(255, tb // 2 + 40), 255)
-    roof_hi = (tr, tg, tb, 255)
-    stone = (128, 132, 138, 255)
-    stone_dark = (82, 86, 92, 255)
+    fence = (92, 68, 44, 255)
+    fence_hi = (128, 96, 62, 255)
+    plaster = (186, 179, 154, 255)
+    plaster_sh = (138, 130, 108, 255)
+    thatch = (128, 92, 58, 255)
+    thatch_dark = (84, 58, 34, 255)
+    thatch_hi = (162, 122, 80, 255)
+    mural = (tr, tg, tb, 235)
+    door = (24, 18, 14, 255)
+    stone = (126, 130, 134, 255)
+    stone_dark = (78, 82, 88, 255)
+
+    if kind == "plan":
+        # Staked wooden blueprint yard for hut construction
+        d.polygon([(36, 64), (10, 51), (36, 38), (62, 51)], fill=(120, 96, 62, 75), outline=(215, 185, 110, 210))
+        for px, py in [(14, 51), (36, 40), (58, 51), (36, 62), (24, 45), (48, 45), (24, 57), (48, 57)]:
+            d.line([(px, py), (px, py - 6)], fill=fence_hi, width=2)
+        return img
+
+    if kind == "frame":
+        d.polygon([(36, 64), (10, 51), (36, 38), (62, 51)], fill=(116, 90, 56, 110), outline=fence)
+        d.rectangle([22, 34, 50, 54], outline=fence_hi, width=2)
+        d.line([(22, 34), (36, 22), (50, 34)], fill=thatch_hi, width=2)
+        d.line([(36, 22), (36, 54)], fill=fence, width=2)
+        return img
 
     if kind == "tower":
-        d.polygon([(28, 42), (16, 36), (28, 30), (40, 36)], fill=stone_dark)
-        d.rectangle([20, 16, 36, 36], fill=stone, outline=stone_dark)
-        d.polygon([(28, 6), (16, 18), (40, 18)], fill=roof_hi, outline=wood_dark)
+        d.polygon([(36, 62), (22, 55), (36, 48), (50, 55)], fill=stone_dark)
+        d.rectangle([26, 22, 46, 55], fill=stone, outline=stone_dark)
+        d.rectangle([30, 30, 42, 40], fill=mural)
+        d.polygon([(36, 8), (22, 24), (50, 24)], fill=thatch, outline=thatch_dark)
         return img
 
     if kind == "temple":
-        d.polygon([(28, 48), (8, 38), (28, 28), (48, 38)], fill=stone_dark)
-        d.polygon([(28, 44), (11, 35), (28, 26), (45, 35)], fill=stone)
-        d.rectangle([16, 20, 40, 35], fill=stone, outline=stone_dark)
-        d.polygon([(28, 7), (13, 22), (43, 22)], fill=roof_hi, outline=wood_dark)
-        d.rectangle([26, 3, 30, 10], fill=(245, 220, 90, 255))
+        d.polygon([(36, 64), (10, 51), (36, 38), (62, 51)], fill=stone_dark)
+        d.rectangle([18, 30, 54, 52], fill=plaster, outline=stone_dark)
+        d.rectangle([28, 34, 44, 48], fill=mural)
+        d.polygon([(36, 12), (14, 32), (58, 32)], fill=thatch, outline=thatch_dark)
+        d.rectangle([34, 5, 38, 14], fill=(240, 210, 90, 255))
         return img
 
     if kind in ("warrior_hut", "firewarrior_hut"):
-        d.polygon([(28, 48), (9, 39), (28, 30), (47, 39)], fill=wood_dark)
-        d.rectangle([14, 24, 42, 39], fill=wood_light, outline=wood_dark)
-        roof_c = roof_hi if kind == "warrior_hut" else (235, 115, 35, 255)
-        d.polygon([(28, 10), (11, 26), (45, 26)], fill=roof_c, outline=wood_dark)
-        banner_c = (230, 230, 240, 255) if kind == "warrior_hut" else (255, 210, 60, 255)
-        d.rectangle([26, 15, 30, 23], fill=banner_c)
+        d.polygon([(36, 64), (12, 52), (36, 40), (60, 52)], fill=fence)
+        d.rectangle([18, 32, 54, 53], fill=plaster, outline=thatch_dark)
+        d.rectangle([21, 36, 31, 49], fill=mural)
+        roof_c = thatch if kind == "warrior_hut" else (188, 86, 34, 255)
+        d.polygon([(36, 14), (14, 34), (58, 34)], fill=roof_c, outline=thatch_dark)
+        d.rectangle([33, 41, 41, 53], fill=door)
         return img
 
-    # Hut Lv 1-3
-    scale = 10 + level * 3
-    d.polygon([(28, 48), (28 - scale - 4, 39), (28, 30), (28 + scale + 4, 39)], fill=wood_dark)
-    d.rectangle([28 - scale, 39 - (10 + level * 2), 28 + scale, 41], fill=wood_light, outline=wood_dark)
-    d.polygon([(28, 22 - level * 4), (28 - scale - 3, 39 - (10 + level * 2)), (28 + scale + 3, 39 - (10 + level * 2))], fill=roof_base, outline=wood_dark)
-    d.polygon([(28, 22 - level * 4), (28 - 6, 30 - level * 2), (28 + 6, 30 - level * 2)], fill=roof_hi)
-    d.rectangle([25, 33, 31, 41], fill=(35, 24, 18, 255))
+    # Populous Hut Lv 1-3: fenced yard + cream plaster body + tribe mural + brown shingle roof
+    d.polygon([(36, 66), (8, 52), (36, 38), (64, 52)], fill=(96, 74, 48, 130), outline=fence)
+    # Fence pickets along front edges
+    for t in range(6):
+        fx1 = 10 + t * 5
+        fy1 = 52 + int(t * 2.4)
+        fx2 = 62 - t * 5
+        fy2 = 52 + int(t * 2.4)
+        d.line([(fx1, fy1), (fx1, fy1 - 6)], fill=fence_hi, width=2)
+        d.line([(fx2, fy2), (fx2, fy2 - 6)], fill=fence_hi, width=2)
+
+    # Main plaster cylinder body
+    bw = 14 + level * 3
+    bh = 16 + level * 2
+    base_y = 54
+    d.rectangle([36 - bw, base_y - bh, 36 + bw, base_y], fill=plaster, outline=plaster_sh)
+    # Shading on right side
+    d.rectangle([36 + bw - 5, base_y - bh, 36 + bw, base_y], fill=plaster_sh)
+    # Tribe mural painted on wall
+    d.rectangle([36 + 3, base_y - bh + 3, 36 + bw - 3, base_y - 2], fill=mural)
+    # Dark arched doorway
+    d.rectangle([33, base_y - 11, 39, base_y], fill=door)
+    # Round dark window on left wall
+    d.ellipse([36 - bw + 4, base_y - bh + 4, 36 - bw + 10, base_y - bh + 10], fill=door)
+
+    # Layered curved brown thatch/shingle roof
+    roof_y = base_y - bh
+    d.polygon([(36, roof_y - 12 - level), (36 - bw - 5, roof_y + 2), (36 + bw + 5, roof_y + 2)], fill=thatch, outline=thatch_dark)
+    d.polygon([(36, roof_y - 12 - level), (36 - bw // 2, roof_y - 2), (36 + bw // 2, roof_y - 2)], fill=thatch_hi)
+
+    # Level 2 & 3 conical turret tower on left + tribe chimney cap
+    if level >= 2:
+        tx = 36 - bw + 7
+        d.rectangle([tx - 6, roof_y - 15, tx + 6, roof_y], fill=plaster, outline=plaster_sh)
+        d.ellipse([tx - 2, roof_y - 12, tx + 2, roof_y - 6], fill=door)
+        d.polygon([(tx, roof_y - 24), (tx - 9, roof_y - 13), (tx + 9, roof_y - 13)], fill=thatch, outline=thatch_dark)
+    if level >= 3:
+        # Chimney with tribe collar & smoke wisp
+        d.rectangle([42, roof_y - 14, 48, roof_y - 6], fill=mural, outline=thatch_dark)
+        d.ellipse([43, roof_y - 22, 48, roof_y - 15], fill=(235, 235, 230, 140))
+    return img
+
+
+def draw_populous_tree(stump: bool = False) -> Image.Image:
+    w, h = 48, 56
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    trunk = (78, 50, 28, 255)
+    trunk_hi = (108, 72, 42, 255)
+    if stump:
+        d.ellipse([16, 44, 32, 52], fill=(64, 44, 24, 180))
+        d.rectangle([20, 42, 28, 49], fill=trunk, outline=trunk_hi)
+        return img
+    # Shadow + gnarled trunk
+    d.ellipse([12, 44, 36, 53], fill=(20, 26, 16, 110))
+    d.polygon([(20, 49), (22, 32), (27, 32), (29, 49)], fill=trunk)
+    d.line([(23, 47), (24, 33)], fill=trunk_hi, width=2)
+    # Angular Populous olive-moss canopy
+    d.polygon([(8, 33), (12, 16), (24, 10), (37, 15), (41, 32), (32, 37), (15, 37)], fill=(96, 116, 36, 255), outline=(54, 68, 22, 255))
+    d.polygon([(14, 26), (18, 14), (31, 14), (35, 25), (25, 29)], fill=(122, 142, 46, 255))
+    for lx, ly in [(15, 22), (24, 18), (32, 24), (20, 30), (29, 31)]:
+        d.ellipse([lx - 3, ly - 2, lx + 3, ly + 2], fill=(74, 92, 28, 255))
     return img
 
 
@@ -200,10 +275,15 @@ def build_world_atlas():
     for tribe, rgb in TRIBE_TARGETS.items():
         for lv in (1, 2, 3):
             frames[f"hut_{lv}_{tribe}"] = draw_iso_hut(rgb, lv, "hut")
+        frames[f"hut_plan_{tribe}"] = draw_iso_hut(rgb, 1, "plan")
+        frames[f"hut_frame_{tribe}"] = draw_iso_hut(rgb, 1, "frame")
         frames[f"temple_{tribe}"] = draw_iso_hut(rgb, 2, "temple")
         frames[f"warrior_hut_{tribe}"] = draw_iso_hut(rgb, 2, "warrior_hut")
         frames[f"firewarrior_hut_{tribe}"] = draw_iso_hut(rgb, 2, "firewarrior_hut")
         frames[f"guard_tower_{tribe}"] = draw_iso_hut(rgb, 2, "tower")
+
+    frames["tree_full"] = draw_populous_tree(stump=False)
+    frames["tree_stump"] = draw_populous_tree(stump=True)
 
     # Stone Head monument
     sh = Image.new("RGBA", (40, 48), (0, 0, 0, 0))

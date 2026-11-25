@@ -26,7 +26,7 @@ const hud = new HudController(
     state = freshState;
     sceneRef?.replaceState(freshState);
   },
-  () => sceneRef?.startAmbience()
+  () => sceneRef?.triggerOpeningConvert()
 );
 
 if (offline.manaGained >= 1) {

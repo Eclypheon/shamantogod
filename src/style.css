@@ -51,19 +51,19 @@ html, body, #app, #game-container {
   color: var(--ink);
 }
 
-/* Sleek single-row top telemetry ribbon */
+/* Sleek single-row top telemetry ribbon sized for iPhone 15 landscape (844x390 + safe areas) */
 .top-ribbon {
   position: fixed;
   top: var(--safe-t);
   left: var(--safe-l);
   right: var(--safe-r);
-  height: 36px;
+  height: 34px;
   border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 0 10px;
+  gap: 6px;
+  padding: 0 8px;
   white-space: nowrap;
   overflow: hidden;
 }
@@ -73,42 +73,29 @@ html, body, #app, #game-container {
 .ribbon-right {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 5px;
   min-width: 0;
+  flex-shrink: 0;
+}
+
+.ribbon-left {
+  flex-shrink: 1;
 }
 
 .planet-title {
   font-family: var(--font-display);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
   color: var(--ink);
+  max-width: 118px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.mode-badge {
-  font-family: var(--font-display);
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  padding: 2px 6px;
-  border-radius: 3px;
-  background: rgba(140, 98, 41, 0.16);
-  border: 1px solid var(--bronze);
-  color: var(--ink-soft);
-}
-
-.mode-badge.god {
-  background: rgba(143, 36, 30, 0.14);
-  border-color: var(--crimson);
-  color: var(--crimson);
-}
-
 .dom-track {
-  width: 68px;
-  height: 8px;
+  width: 44px;
+  height: 7px;
   border-radius: 4px;
   background: rgba(39, 24, 12, 0.18);
   border: 1px solid var(--bronze);
@@ -124,37 +111,37 @@ html, body, #app, #game-container {
 }
 
 .metric {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--ink-soft);
   display: flex;
   align-items: baseline;
-  gap: 3px;
+  gap: 2px;
 }
 
 .metric strong {
   font-family: var(--font-display);
-  font-size: 12px;
+  font-size: 11px;
   color: var(--ink);
 }
 
 .metric .sub {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--cobalt);
 }
 
 .sep {
-  color: rgba(92, 64, 38, 0.4);
-  font-size: 11px;
+  color: rgba(92, 64, 38, 0.38);
+  font-size: 10px;
 }
 
 .btn {
   font-family: var(--font-display);
-  font-size: 10px;
+  font-size: 9.5px;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
-  padding: 4px 8px;
+  padding: 4px 7px;
   border-radius: 4px;
   border: 1px solid var(--bronze);
   background: linear-gradient(180deg, #efe0bc 0%, #d4b882 100%);
@@ -227,8 +214,9 @@ html, body, #app, #game-container {
 .spell-dock {
   position: fixed;
   left: calc(var(--safe-l) + 124px);
-  right: var(--safe-r);
   bottom: var(--safe-b);
+  max-width: calc(100vw - var(--safe-l) - var(--safe-r) - 124px);
+  width: fit-content;
   border-radius: 6px;
   padding: 5px 6px;
   display: flex;
@@ -498,14 +486,41 @@ html, body, #app, #game-container {
   flex: 1;
   min-height: 0;
   margin-top: 6px;
+  overflow: hidden;
+  border-radius: 6px;
+  border: 1px solid rgba(140, 98, 41, 0.35);
+  background:
+    radial-gradient(circle at 50% 50%, rgba(255, 248, 220, 0.35), rgba(164, 122, 58, 0.16));
+  cursor: grab;
+  touch-action: none;
+}
+
+.pantheon-canvas:active {
+  cursor: grabbing;
+}
+
+.pantheon-stage {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 900px;
+  height: 540px;
+  margin-left: -450px;
+  margin-top: -270px;
+  transform-origin: center center;
 }
 
 .pantheon-lines {
   position: absolute;
   inset: 0;
-  width: 100%;
-  height: 100%;
+  width: 900px;
+  height: 540px;
   pointer-events: none;
+}
+
+.p-node.locked {
+  opacity: 0.52;
+  filter: grayscale(0.45);
 }
 
 .p-node {

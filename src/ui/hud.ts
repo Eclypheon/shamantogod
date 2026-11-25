@@ -4,7 +4,6 @@ import {
   buyMetaUpgrade,
   computeDominance,
   formAlliance,
-  getCastRangePx,
   getMetaUpgradeCost,
   getPlanetConfig,
   getPlanetManaPerSec,
@@ -12,15 +11,16 @@ import {
   getTotalManaPerSec,
   hasSavedGame,
   isCampaignWon,
+  isMetaNodeUnlocked,
   isSpellUnlocked,
+  prestigeToPlanet,
   rebalanceUnits,
   resetGame,
   saveGame,
-  switchPlanet,
   type GameState,
 } from '../game/state';
 
-export type DrawerTab = 'none' | 'tribe' | 'planets' | 'telemetry';
+export type DrawerTab = 'none' | 'tribe' | 'planets';
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -29,14 +29,20 @@ interface BeforeInstallPromptEvent extends Event {
 
 const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII', 'XIII', 'XIV', 'XV'];
 
-// Coordinates (% of parchment board) for the 6 glowing meta-progression nodes around center (50, 50)
+// Organic branched tree coordinates inside 900x540 parchment stage (center spark = 450, 270)
+const SPARK_POS = { x: 450, y: 270 };
 const NODE_POS: Record<MetaUpgradeConfig['id'], { x: number; y: number }> = {
-  startingMana: { x: 22, y: 26 },
-  manaRate: { x: 50, y: 18 },
-  castRange: { x: 78, y: 26 },
-  spellPower: { x: 78, y: 74 },
-  popCap: { x: 50, y: 82 },
-  offlineEfficiency: { x: 22, y: 74 },
+  // Branch 1: Way of Mana (upper-left arc)
+  startingMana: { x: 295, y: 205 },
+  manaRate: { x: 185, y: 125 },
+  offlineEfficiency: { x: 110, y: 245 },
+  // Branch 2: Way of War (right bough splitting into two)
+  spellPower: { x: 605, y: 205 },
+  castRange: { x: 735, y: 120 },
+  tempestForce: { x: 765, y: 275 },
+  // Branch 3: Way of the Village (lower root bough)
+  popCap: { x: 450, y: 395 },
+  timberMastery: { x: 305, y: 445 },
 };
 
 export class HudController {
@@ -47,25 +53,27 @@ export class HudController {
   private pantheonOpen = false;
   private confirmRestart = false;
   private victoryDismissed = false;
-  private selectedMetaId: MetaUpgradeConfig['id'] = 'manaRate';
+  private selectedMetaId: MetaUpgradeConfig['id'] = 'startingMana';
+  private panX = 0;
+  private panY = 0;
+  private zoom = 0.56;
   private toastTimer = 0;
   private onJoystick: (x: number, y: number) => void;
   private onResetState: (fresh: GameState) => void;
-  private onStartAudio: () => void;
+  private onBeginPlay: () => void;
   private deferredInstallPrompt: BeforeInstallPromptEvent | null = null;
   private installDismissed = false;
   private lastSpellSignature = '';
 
   // Persistent HUD DOM references
   private elPlanetTitle!: HTMLElement;
-  private elModeBadge!: HTMLElement;
   private elDomFill!: HTMLElement;
   private elDomVal!: HTMLElement;
   private elManaVal!: HTMLElement;
   private elManaRate!: HTMLElement;
+  private elEssenceWrap!: HTMLElement;
   private elEssenceVal!: HTMLElement;
   private elPopVal!: HTMLElement;
-  private elRangeVal!: HTMLElement;
   private elBuffs!: HTMLElement;
   private elAscendBtn!: HTMLButtonElement;
   private elTabBtns!: NodeListOf<HTMLButtonElement>;
@@ -81,13 +89,13 @@ export class HudController {
     state: GameState,
     onJoystick: (x: number, y: number) => void,
     onResetState: (fresh: GameState) => void,
-    onStartAudio: () => void
+    onBeginPlay: () => void
   ) {
     this.root = root;
     this.state = state;
     this.onJoystick = onJoystick;
     this.onResetState = onResetState;
-    this.onStartAudio = onStartAudio;
+    this.onBeginPlay = onBeginPlay;
 
     this.mountShell();
 
@@ -124,25 +132,23 @@ export class HudController {
       <header class="papyrus top-ribbon">
         <div class="ribbon-left">
           <span class="planet-title" id="hud-planet"></span>
-          <span class="mode-badge" id="hud-mode"></span>
           <div class="dom-track" title="Dominance"><div class="dom-fill" id="hud-dom-fill"></div></div>
           <span class="metric"><strong id="hud-dom">0%</strong></span>
-          <span id="hud-buffs" style="display:flex;gap:4px;"></span>
+          <span id="hud-buffs" style="display:flex;gap:3px;"></span>
         </div>
         <div class="ribbon-center">
           <span class="metric">Mana <strong id="hud-mana">0</strong><span class="sub" id="hud-rate">(+0/s)</span></span>
           <span class="sep">·</span>
-          <span class="metric">Essence <strong id="hud-essence">0</strong></span>
-          <span class="sep hide-sm">·</span>
-          <span class="metric hide-sm">Pop <strong id="hud-pop">0/0</strong></span>
-          <span class="sep hide-sm">·</span>
-          <span class="metric hide-sm">Range <strong id="hud-range">0</strong></span>
+          <span class="metric">Pop <strong id="hud-pop">0/0</strong></span>
+          <span id="hud-essence-wrap" style="display:none;align-items:baseline;gap:4px;">
+            <span class="sep">·</span>
+            <span class="metric">Ess <strong id="hud-essence">0</strong></span>
+          </span>
         </div>
         <div class="ribbon-right">
           <button class="btn" data-tab="tribe">Tribe</button>
           <button class="btn" data-tab="planets">Worlds</button>
           <button class="btn" id="hud-open-pantheon">Pantheon</button>
-          <button class="btn" data-tab="telemetry">Stats</button>
           <button class="btn ascend" id="hud-ascend" style="display:none;">Ascend</button>
           <button class="btn" id="hud-open-menu">Menu</button>
         </div>
@@ -165,20 +171,18 @@ export class HudController {
       <div class="landscape-overlay" id="hud-rotate">
         <div style="font-size:38px;">&#8635;</div>
         <strong style="font-family:var(--font-display);font-size:17px;letter-spacing:0.06em;">Rotate to Landscape</strong>
-        <span style="font-size:14px;max-width:280px;opacity:0.85;">Shaman to God is crafted for wide-screen landscape play. Tilt your device to begin.</span>
-        <button class="btn" id="hud-rotate-dismiss">Continue anyway</button>
+        <span style="font-size:14px;max-width:280px;opacity:0.85;">Shaman to God is crafted for wide-screen landscape play. Tilt your device to continue.</span>
       </div>
     `;
 
     this.elPlanetTitle = this.root.querySelector('#hud-planet')!;
-    this.elModeBadge = this.root.querySelector('#hud-mode')!;
     this.elDomFill = this.root.querySelector('#hud-dom-fill')!;
     this.elDomVal = this.root.querySelector('#hud-dom')!;
     this.elManaVal = this.root.querySelector('#hud-mana')!;
     this.elManaRate = this.root.querySelector('#hud-rate')!;
+    this.elEssenceWrap = this.root.querySelector('#hud-essence-wrap')!;
     this.elEssenceVal = this.root.querySelector('#hud-essence')!;
     this.elPopVal = this.root.querySelector('#hud-pop')!;
-    this.elRangeVal = this.root.querySelector('#hud-range')!;
     this.elBuffs = this.root.querySelector('#hud-buffs')!;
     this.elAscendBtn = this.root.querySelector('#hud-ascend')!;
     this.elTabBtns = this.root.querySelectorAll('[data-tab]');
@@ -213,17 +217,14 @@ export class HudController {
 
     this.elAscendBtn.addEventListener('click', () => {
       const nextId = this.state.activePlanetId + 1;
-      if (switchPlanet(this.state, nextId)) {
+      const res = prestigeToPlanet(this.state, nextId);
+      if (res.ok) {
         saveGame(this.state);
-        this.showToast(`Ascended to Planet ${ROMAN[nextId - 1] ?? nextId}`);
+        const essMsg = res.bankedEssence > 0 ? ` (+${res.bankedEssence} Essence)` : '';
+        this.showToast(`Ascended to Planet ${ROMAN[nextId - 1] ?? nextId}${essMsg}`);
         this.sync();
         if (this.activeTab !== 'none') this.renderDrawer();
       }
-    });
-
-    const rotateOverlay = this.root.querySelector<HTMLElement>('#hud-rotate')!;
-    this.root.querySelector('#hud-rotate-dismiss')!.addEventListener('click', () => {
-      rotateOverlay.classList.add('dismissed');
     });
 
     this.bindJoystick();
@@ -249,6 +250,7 @@ export class HudController {
         <div class="title-actions">
           <button class="btn ascend" id="btn-start-game">${saved ? 'Continue Conquest' : 'Begin Conquest'}</button>
           <button class="btn" id="btn-title-pantheon">Pantheon Tree</button>
+          <button class="btn" id="btn-title-mute">${this.state.muted ? 'Sound: Off' : 'Sound: On'}</button>
           ${
             this.confirmRestart
               ? `<button class="btn danger" id="btn-confirm-restart">Confirm Restart</button>
@@ -257,8 +259,9 @@ export class HudController {
           }
           ${this.deferredInstallPrompt ? `<button class="btn" id="btn-title-install">Install PWA</button>` : ''}
         </div>
-        <div style="font-size:12px;color:var(--ink-soft);margin-top:4px;">
-          Move with WASD or Bronze Compass · Tap world to cast spells · Conquer all 15 planets (&gt;95% Dominance)
+        <div style="display:flex;align-items:center;justify-content:center;gap:10px;margin-top:2px;">
+          <span style="font-size:11px;color:var(--ink-soft);">WASD or Compass to move · Tap world to cast</span>
+          <button class="btn" style="font-size:8px;padding:2px 6px;opacity:0.75;" id="btn-title-reset-pwa">Refresh App Cache</button>
         </div>
       </div>
     `;
@@ -266,13 +269,19 @@ export class HudController {
     this.elTitleScreen.querySelector('#btn-start-game')?.addEventListener('click', () => {
       this.titleOpen = false;
       this.elTitleScreen.classList.remove('open');
-      this.onStartAudio();
+      this.onBeginPlay();
       this.sync();
     });
 
     this.elTitleScreen.querySelector('#btn-title-pantheon')?.addEventListener('click', () => {
       this.pantheonOpen = true;
       this.renderPantheon();
+    });
+
+    this.elTitleScreen.querySelector('#btn-title-mute')?.addEventListener('click', () => {
+      this.state.muted = !this.state.muted;
+      saveGame(this.state);
+      this.renderTitleScreen();
     });
 
     this.elTitleScreen.querySelector('#btn-restart-game')?.addEventListener('click', () => {
@@ -293,7 +302,7 @@ export class HudController {
       this.titleOpen = false;
       this.victoryDismissed = false;
       this.elTitleScreen.classList.remove('open');
-      this.onStartAudio();
+      this.onBeginPlay();
       this.showToast('New Conquest Begun');
       this.sync();
     });
@@ -303,6 +312,18 @@ export class HudController {
       await this.deferredInstallPrompt.prompt();
       this.deferredInstallPrompt = null;
       this.renderTitleScreen();
+    });
+
+    this.elTitleScreen.querySelector('#btn-title-reset-pwa')?.addEventListener('click', async () => {
+      if ('serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map((r) => r.unregister()));
+      }
+      if ('caches' in window) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map((k) => caches.delete(k)));
+      }
+      window.location.reload();
     });
   }
 
@@ -315,11 +336,18 @@ export class HudController {
     const selLvl = this.state.metaLevels[selected.id];
     const selCost = getMetaUpgradeCost(selected, selLvl);
     const selMaxed = selLvl >= selected.maxLevel;
+    const selUnlocked = isMetaNodeUnlocked(this.state, selected);
 
-    const linesSvg = META_UPGRADES.map((u) => {
-      const pos = NODE_POS[u.id];
+    // Organic curved Bezier branches from parent (or center spark) to each child node
+    const pathsSvg = META_UPGRADES.map((u) => {
+      const from = u.parent ? NODE_POS[u.parent] : SPARK_POS;
+      const to = NODE_POS[u.id];
+      const mx = (from.x + to.x) / 2 + (to.y - from.y) * 0.16;
+      const my = (from.y + to.y) / 2 - (to.x - from.x) * 0.16;
       const leveled = this.state.metaLevels[u.id] > 0;
-      return `<line x1="50%" y1="50%" x2="${pos.x}%" y2="${pos.y}%" stroke="${leveled ? '#b87c1e' : 'rgba(140,98,41,0.4)'}" stroke-width="${leveled ? '3' : '1.8'}" stroke-dasharray="${leveled ? '' : '4 4'}" />`;
+      const unlocked = isMetaNodeUnlocked(this.state, u);
+      const stroke = leveled ? '#b87c1e' : unlocked ? 'rgba(140,98,41,0.68)' : 'rgba(140,98,41,0.28)';
+      return `<path d="M ${from.x} ${from.y} Q ${mx} ${my} ${to.x} ${to.y}" fill="none" stroke="${stroke}" stroke-width="${leveled ? '3.5' : '2'}" stroke-dasharray="${leveled ? '' : '5 4'}" />`;
     }).join('');
 
     const nodesHtml = META_UPGRADES.map((u) => {
@@ -327,11 +355,12 @@ export class HudController {
       const lvl = this.state.metaLevels[u.id];
       const cost = getMetaUpgradeCost(u, lvl);
       const maxed = lvl >= u.maxLevel;
-      const affordable = !maxed && this.state.divineEssence >= cost;
-      const cls = `p-node ${lvl > 0 ? 'leveled' : ''} ${affordable ? 'affordable' : ''}`;
-      return `<button class="${cls}" style="left:${pos.x}%;top:${pos.y}%;" data-pnode="${u.id}">
+      const unlocked = isMetaNodeUnlocked(this.state, u);
+      const affordable = unlocked && !maxed && this.state.divineEssence >= cost;
+      const cls = `p-node ${lvl > 0 ? 'leveled' : ''} ${affordable ? 'affordable' : ''} ${!unlocked ? 'locked' : ''}`;
+      return `<button class="${cls}" style="left:${pos.x}px;top:${pos.y}px;" data-pnode="${u.id}">
         <span class="pn-name">${u.name}</span>
-        <span class="pn-lvl">Lv ${lvl}/${u.maxLevel}</span>
+        <span class="pn-lvl">${unlocked ? `Lv ${lvl}/${u.maxLevel}` : 'Locked'}</span>
         <span class="pn-cost">${maxed ? 'MAX' : `${cost} Ess`}</span>
       </button>`;
     }).join('');
@@ -340,29 +369,81 @@ export class HudController {
       <div class="parchment-board">
         <div class="pantheon-header">
           <h2>PANTHEON OF KAELIS</h2>
-          <div style="display:flex;align-items:center;gap:10px;">
-            <span class="metric">Divine Essence: <strong>${Math.floor(this.state.divineEssence)}</strong></span>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span class="metric">Essence: <strong>${Math.floor(this.state.divineEssence)}</strong> <span class="sub">(+${Math.floor(this.state.pendingDivineEssence)} on Prestige)</span></span>
+            <button class="btn" id="btn-zoom-out">-</button>
+            <button class="btn" id="btn-zoom-in">+</button>
+            <button class="btn" id="btn-zoom-reset">Fit</button>
             <button class="btn" id="btn-close-pantheon">Close</button>
           </div>
         </div>
-        <div class="pantheon-canvas">
-          <svg class="pantheon-lines">${linesSvg}</svg>
-          <div class="p-node center-node" style="left:50%;top:50%;">
-            <span class="pn-name">SHAMAN'S SPARK</span>
-            <span class="pn-lvl">${conquered}/15 Worlds</span>
+        <div class="pantheon-canvas" id="pantheon-viewport">
+          <div class="pantheon-stage" id="pantheon-stage" style="transform:translate(${this.panX}px,${this.panY}px) scale(${this.zoom});">
+            <svg class="pantheon-lines" viewBox="0 0 900 540">${pathsSvg}</svg>
+            <div class="p-node center-node" style="left:${SPARK_POS.x}px;top:${SPARK_POS.y}px;">
+              <span class="pn-name">SHAMAN'S SPARK</span>
+              <span class="pn-lvl">${conquered}/15 Worlds</span>
+            </div>
+            ${nodesHtml}
           </div>
-          ${nodesHtml}
         </div>
         <div class="pantheon-footer">
           <div>
             <strong>${selected.name}</strong> (Lv ${selLvl}/${selected.maxLevel}): ${selected.description}
+            ${!selUnlocked && selected.parent ? ` <em>Requires ${META_UPGRADES.find((m) => m.id === selected.parent)?.name}</em>` : ''}
           </div>
-          <button class="btn ascend" id="btn-bless-selected" ${selMaxed || this.state.divineEssence < selCost ? 'disabled' : ''}>
-            ${selMaxed ? 'Maxed' : `Bless (${selCost} Essence)`}
+          <button class="btn ascend" id="btn-bless-selected" ${!selUnlocked || selMaxed || this.state.divineEssence < selCost ? 'disabled' : ''}>
+            ${selMaxed ? 'Maxed' : `Bless (${selCost} Ess)`}
           </button>
         </div>
       </div>
     `;
+
+    const stage = this.elPantheonModal.querySelector<HTMLElement>('#pantheon-stage')!;
+    const viewport = this.elPantheonModal.querySelector<HTMLElement>('#pantheon-viewport')!;
+    const applyTransform = () => {
+      stage.style.transform = `translate(${this.panX}px, ${this.panY}px) scale(${this.zoom})`;
+    };
+
+    // Drag to pan + wheel to zoom
+    let dragging = false;
+    let startX = 0;
+    let startY = 0;
+    viewport.addEventListener('pointerdown', (e) => {
+      if ((e.target as HTMLElement).closest('button')) return;
+      dragging = true;
+      startX = e.clientX - this.panX;
+      startY = e.clientY - this.panY;
+      viewport.setPointerCapture(e.pointerId);
+    });
+    viewport.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      this.panX = Math.max(-320, Math.min(320, e.clientX - startX));
+      this.panY = Math.max(-220, Math.min(220, e.clientY - startY));
+      applyTransform();
+    });
+    viewport.addEventListener('pointerup', () => { dragging = false; });
+    viewport.addEventListener('pointercancel', () => { dragging = false; });
+    viewport.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      this.zoom = Math.max(0.55, Math.min(1.65, this.zoom - e.deltaY * 0.001));
+      applyTransform();
+    }, { passive: false });
+
+    this.elPantheonModal.querySelector('#btn-zoom-in')?.addEventListener('click', () => {
+      this.zoom = Math.min(1.65, this.zoom + 0.16);
+      applyTransform();
+    });
+    this.elPantheonModal.querySelector('#btn-zoom-out')?.addEventListener('click', () => {
+      this.zoom = Math.max(0.55, this.zoom - 0.16);
+      applyTransform();
+    });
+    this.elPantheonModal.querySelector('#btn-zoom-reset')?.addEventListener('click', () => {
+      this.panX = 0;
+      this.panY = 0;
+      this.zoom = 0.56;
+      applyTransform();
+    });
 
     this.elPantheonModal.querySelector('#btn-close-pantheon')?.addEventListener('click', () => {
       this.pantheonOpen = false;
@@ -417,7 +498,6 @@ export class HudController {
     zone.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
       e.preventDefault();
-      this.onStartAudio();
       activePointerId = e.pointerId;
       zone.setPointerCapture(e.pointerId);
       updateFromClient(e.clientX, e.clientY);
@@ -450,31 +530,32 @@ export class HudController {
     }, 2200);
   }
 
-  /** Fast in-place HUD update called every 250ms; never destroys joystick or open drawer inputs. */
+  /** Fast in-place HUD update; never destroys joystick or open drawer controls. */
   sync(): void {
     const cfg = getPlanetConfig(this.state.activePlanetId);
     const p = this.state.planets[cfg.id];
     const dom = computeDominance(p);
     const manaRate = getTotalManaPerSec(this.state);
     const popCap = getPopCap(this.state, cfg.id);
-    const range = getCastRangePx(this.state, cfg.id);
     const nextPlanet = this.state.planets[cfg.id + 1];
 
     this.elPlanetTitle.textContent = `${ROMAN[cfg.id - 1] ?? cfg.id} · ${cfg.name.split(': ')[1] ?? cfg.name}`;
-    this.elModeBadge.textContent = cfg.mode === 'junior-god' ? 'Junior God' : 'Shaman';
-    this.elModeBadge.classList.toggle('god', cfg.mode === 'junior-god');
     this.elDomFill.style.width = `${dom}%`;
     this.elDomVal.textContent = `${dom.toFixed(0)}%`;
     this.elManaVal.textContent = `${Math.floor(this.state.mana)}`;
     this.elManaRate.textContent = `(+${manaRate.toFixed(1)}/s)`;
-    this.elEssenceVal.textContent = `${Math.floor(this.state.divineEssence)}`;
     this.elPopVal.textContent = `${p.loyalPop}/${popCap}`;
-    this.elRangeVal.textContent = Number.isFinite(range) ? `${Math.round(range)}` : 'Global';
 
-    // Active buffs
+    if (this.state.divineEssence > 0) {
+      this.elEssenceWrap.style.display = 'inline-flex';
+      this.elEssenceVal.textContent = `${Math.floor(this.state.divineEssence)}`;
+    } else {
+      this.elEssenceWrap.style.display = 'none';
+    }
+
     const activeBuffHtml = Object.entries(this.state.activeBuffs)
       .filter(([, sec]) => sec > 0.2)
-      .map(([id, sec]) => `<span class="buff-pill">${id.slice(0, 5)} ${Math.ceil(sec)}s</span>`)
+      .map(([id, sec]) => `<span class="buff-pill">${id.slice(0, 4)} ${Math.ceil(sec)}s</span>`)
       .join('');
     this.elBuffs.innerHTML = activeBuffHtml;
 
@@ -493,10 +574,6 @@ export class HudController {
 
     this.syncSpells();
     this.syncTabs();
-
-    if (this.activeTab === 'telemetry') {
-      this.renderDrawer();
-    }
   }
 
   private syncTabs(): void {
@@ -596,67 +673,53 @@ export class HudController {
       const r = this.state.ratios;
       body = `
         <div class="scroll-card">
-          <label><input type="checkbox" id="autobuild-chk" ${this.state.autoBuild ? 'checked' : ''}/> Auto-build Huts &amp; Training</label>
-          <div class="slider-row"><span>Braves (${p.braves})</span><input type="range" min="10" max="80" value="${r.brave}" data-ratio="brave"/><span data-rval="brave">${r.brave}%</span></div>
-          <div class="slider-row"><span>Preachers (${p.preachers})</span><input type="range" min="0" max="60" value="${r.preacher}" data-ratio="preacher"/><span data-rval="preacher">${r.preacher}%</span></div>
-          <div class="slider-row"><span>Warriors (${p.warriors})</span><input type="range" min="0" max="70" value="${r.warrior}" data-ratio="warrior"/><span data-rval="warrior">${r.warrior}%</span></div>
-          <div class="slider-row"><span>Fire War. (${p.fireWarriors})</span><input type="range" min="0" max="60" value="${r.fireWarrior}" data-ratio="fireWarrior"/><span data-rval="fireWarrior">${r.fireWarrior}%</span></div>
+          Huts Built: <strong>${p.hutsBuilt}</strong> · Mana/sec: <strong>+${getPlanetManaPerSec(this.state, cfg.id).toFixed(1)}</strong><br/>
+          ${p.hutsBuilt === 0 ? '<small>Convert Wildmen to chop trees and raise your first Hut.</small>' : ''}
         </div>
+        ${
+          p.hutsBuilt >= 1
+            ? `<div class="scroll-card">
+                <div class="slider-row"><span>Braves (${p.braves})</span><input type="range" min="10" max="80" value="${r.brave}" data-ratio="brave"/><span data-rval="brave">${r.brave}%</span></div>
+                <div class="slider-row"><span>Preachers (${p.preachers})</span><input type="range" min="0" max="60" value="${r.preacher}" data-ratio="preacher"/><span data-rval="preacher">${r.preacher}%</span></div>
+                <div class="slider-row"><span>Warriors (${p.warriors})</span><input type="range" min="0" max="70" value="${r.warrior}" data-ratio="warrior"/><span data-rval="warrior">${r.warrior}%</span></div>
+                <div class="slider-row"><span>Fire War. (${p.fireWarriors})</span><input type="range" min="0" max="60" value="${r.fireWarrior}" data-ratio="fireWarrior"/><span data-rval="fireWarrior">${r.fireWarrior}%</span></div>
+              </div>
+              <div class="scroll-card" style="display:flex;gap:6px;align-items:center;justify-content:space-between;">
+                <span>Guard Towers: <strong>${p.towersBuilt}/4</strong></span>
+                <button class="btn" ${p.towersBuilt >= 4 || this.state.mana < 150 * (p.towersBuilt + 1) ? 'disabled' : ''} data-action="build-tower">
+                  ${p.towersBuilt >= 4 ? 'Maxed' : `Build (${150 * (p.towersBuilt + 1)} M)`}
+                </button>
+              </div>`
+            : ''
+        }
         ${
           cfg.allianceTribe && cfg.allianceCost
             ? `<div class="scroll-card">
                 <strong>Alliance (${cfg.allianceTribe.toUpperCase()})</strong><br/>
-                ${p.allied ? 'Pact sealed: Ally Shaman fights alongside you (+25% Mana, +10% Dominance).' : `<button class="btn ascend" data-action="alliance">Seal Alliance (${cfg.allianceCost} Mana)</button>`}
+                ${p.allied ? 'Pact sealed: Ally Shaman fights alongside you.' : `<button class="btn ascend" data-action="alliance">Seal Alliance (${cfg.allianceCost} Mana)</button>`}
               </div>`
             : ''
         }
-        <div class="scroll-card" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;justify-content:space-between;">
-          <span>Guard Towers: <strong>${p.towersBuilt}/4</strong></span>
-          <button class="btn" ${p.towersBuilt >= 4 || this.state.mana < 150 * (p.towersBuilt + 1) ? 'disabled' : ''} data-action="build-tower">
-            ${p.towersBuilt >= 4 ? 'Maxed' : `Build (${150 * (p.towersBuilt + 1)} M)`}
-          </button>
-        </div>
-        <div class="scroll-card" style="display:flex;gap:6px;flex-wrap:wrap;">
-          <button class="btn" data-action="toggle-mute">${this.state.muted ? 'Unmute Audio' : 'Mute Audio'}</button>
-          <button class="btn danger" data-action="reset-pwa">Reset PWA Cache</button>
-        </div>
       `;
     } else if (this.activeTab === 'planets') {
       title = 'Kaelis Solar System';
-      body = `<div class="scroll-card">${PLANETS.map((pl) => {
+      body = `<div class="scroll-card">
+        Pending Prestige Essence: <strong>+${Math.floor(this.state.pendingDivineEssence)}</strong>
+      </div>
+      <div class="scroll-card">${PLANETS.map((pl) => {
         const st = this.state.planets[pl.id];
         const dom = computeDominance(st);
         const current = pl.id === this.state.activePlanetId;
         return `<div class="planet-row">
           <div>
             <strong>${ROMAN[pl.id - 1] ?? pl.id} · ${pl.name.split(': ')[1] ?? pl.name}</strong><br/>
-            <small>${pl.mode === 'junior-god' ? 'Junior God' : 'Shaman'} · ${dom.toFixed(0)}% ${st.conquered ? '· Conquered' : ''}</small>
+            <small>${pl.mode === 'junior-god' ? 'Junior God' : 'Shaman'} · ${dom.toFixed(0)}% · +${getPlanetManaPerSec(this.state, pl.id).toFixed(1)}/s</small>
           </div>
           <button class="btn ${current ? 'active' : ''}" ${!st.unlocked ? 'disabled' : ''} data-visit="${pl.id}">
             ${current ? 'Here' : st.unlocked ? 'Travel' : 'Locked'}
           </button>
         </div>`;
       }).join('')}</div>`;
-    } else if (this.activeTab === 'telemetry') {
-      title = 'Oracle Telemetry';
-      body = `
-        <div class="scroll-card">
-          Total Mana/sec: <strong>${getTotalManaPerSec(this.state).toFixed(2)}</strong><br/>
-          Swarm Kills: <strong>${this.state.totalSwarmKills}</strong><br/>
-          Conquered: <strong>${PLANETS.filter((pl) => this.state.planets[pl.id].conquered).length} / 15</strong>
-        </div>
-        <div class="scroll-card">
-          ${PLANETS.filter((pl) => this.state.planets[pl.id].unlocked)
-            .map((pl) => {
-              const st = this.state.planets[pl.id];
-              return `<div class="planet-row">
-                <span>${ROMAN[pl.id - 1] ?? pl.id} (${computeDominance(st).toFixed(0)}%)</span>
-                <span>+${getPlanetManaPerSec(this.state, pl.id).toFixed(1)}/s · ${st.swarmKills} kills</span>
-              </div>`;
-            })
-            .join('')}
-        </div>
-      `;
     }
 
     this.elDrawer.innerHTML = `
@@ -679,9 +742,11 @@ export class HudController {
     this.elDrawer.querySelectorAll<HTMLButtonElement>('[data-visit]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const id = Number(btn.dataset.visit);
-        if (switchPlanet(this.state, id)) {
+        const res = prestigeToPlanet(this.state, id);
+        if (res.ok) {
           saveGame(this.state);
           this.activeTab = 'none';
+          if (res.bankedEssence > 0) this.showToast(`Banked +${res.bankedEssence} Divine Essence!`);
           this.sync();
         }
       });
@@ -705,14 +770,6 @@ export class HudController {
       }
     });
 
-    const autoChk = this.elDrawer.querySelector<HTMLInputElement>('#autobuild-chk');
-    if (autoChk) {
-      autoChk.addEventListener('change', () => {
-        this.state.autoBuild = autoChk.checked;
-        saveGame(this.state);
-      });
-    }
-
     this.elDrawer.querySelectorAll<HTMLInputElement>('[data-ratio]').forEach((inp) => {
       inp.addEventListener('input', () => {
         const key = inp.dataset.ratio as keyof GameState['ratios'];
@@ -722,24 +779,6 @@ export class HudController {
         if (valEl) valEl.textContent = `${inp.value}%`;
         saveGame(this.state);
       });
-    });
-
-    this.elDrawer.querySelector('[data-action="toggle-mute"]')?.addEventListener('click', () => {
-      this.state.muted = !this.state.muted;
-      saveGame(this.state);
-      this.renderDrawer();
-    });
-
-    this.elDrawer.querySelector('[data-action="reset-pwa"]')?.addEventListener('click', async () => {
-      if ('serviceWorker' in navigator) {
-        const regs = await navigator.serviceWorker.getRegistrations();
-        await Promise.all(regs.map((r) => r.unregister()));
-      }
-      if ('caches' in window) {
-        const keys = await caches.keys();
-        await Promise.all(keys.map((k) => caches.delete(k)));
-      }
-      window.location.reload();
     });
   }
 }

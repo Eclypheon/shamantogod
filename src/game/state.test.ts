@@ -9,11 +9,31 @@ import {
   formAlliance,
   getCastRangePx,
   hydrateState,
+  onHutConstructed,
+  onWildmanConverted,
+  prestigeToPlanet,
   stepSimulation,
   switchPlanet,
 } from './state';
 
 describe('Shaman to God simulation', () => {
+  it('starts minimalistic with 0 followers, 0 huts, and 0 Divine Essence until Prestige', () => {
+    const state = createInitialState();
+    expect(state.divineEssence).toBe(0);
+    expect(state.planets[1].loyalPop).toBe(0);
+    expect(state.planets[1].hutsBuilt).toBe(0);
+
+    onWildmanConverted(state);
+    onHutConstructed(state);
+    expect(state.divineEssence).toBe(0);
+    expect(state.pendingDivineEssence).toBeGreaterThan(0);
+
+    state.planets[2].unlocked = true;
+    const res = prestigeToPlanet(state, 2);
+    expect(res.ok).toBe(true);
+    expect(state.divineEssence).toBe(res.bankedEssence);
+  });
+
   it('computes 50/50 Dominance % from loyal pop share and enemy huts destroyed', () => {
     const state = createInitialState();
     const p1 = state.planets[1];
@@ -36,16 +56,14 @@ describe('Shaman to God simulation', () => {
     expect(globalCast.ok).toBe(true);
   });
 
-  it('allows purchasing Divine Essence upgrades and backtracking without penalty', () => {
+  it('enforces branched parent prerequisites on Pantheon nodes', () => {
     const state = createInitialState();
     state.divineEssence = 100;
+    // manaRate requires startingMana first
+    expect(buyMetaUpgrade(state, 'manaRate')).toBe(false);
+    expect(buyMetaUpgrade(state, 'startingMana')).toBe(true);
     expect(buyMetaUpgrade(state, 'manaRate')).toBe(true);
     expect(state.metaLevels.manaRate).toBe(1);
-
-    state.planets[2].unlocked = true;
-    expect(switchPlanet(state, 2)).toBe(true);
-    expect(switchPlanet(state, 1)).toBe(true);
-    expect(state.activePlanetId).toBe(1);
   });
 
   it('applies bounded offline Mana progress', () => {
@@ -86,7 +104,7 @@ describe('Shaman to God simulation', () => {
 
   it('safely hydrates partial or older saved states without missing planets', () => {
     const hydrated = hydrateState({
-      version: 1,
+      version: 2,
       mana: 321,
       planets: { 1: { planetId: 1, unlocked: true, hutsBuilt: 3 } },
     });

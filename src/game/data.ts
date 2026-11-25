@@ -30,8 +30,17 @@ export interface SpellConfig {
 }
 
 export interface MetaUpgradeConfig {
-  id: 'startingMana' | 'manaRate' | 'castRange' | 'spellPower' | 'popCap' | 'offlineEfficiency';
+  id:
+    | 'startingMana'
+    | 'manaRate'
+    | 'castRange'
+    | 'spellPower'
+    | 'popCap'
+    | 'offlineEfficiency'
+    | 'timberMastery'
+    | 'tempestForce';
   name: string;
+  parent?: MetaUpgradeConfig['id'];
   baseCost: number;
   costScale: number;
   maxLevel: number;
@@ -82,10 +91,15 @@ export const SPELLS: SpellConfig[] = [
 ];
 
 export const META_UPGRADES: MetaUpgradeConfig[] = [
+  // Branch 1: Way of Mana
   { id: 'startingMana', name: 'Ancestral Font', baseCost: 5, costScale: 1.6, maxLevel: 20, description: '+50 starting Mana on every planet.' },
-  { id: 'manaRate', name: 'Worship Resonance', baseCost: 8, costScale: 1.7, maxLevel: 25, description: '+25% Mana/sec across all planets.' },
-  { id: 'castRange', name: 'Astral Reach', baseCost: 6, costScale: 1.55, maxLevel: 15, description: '+15% Shaman cast range (Planets 1-11).' },
-  { id: 'spellPower', name: 'Arcane Surge', baseCost: 10, costScale: 1.75, maxLevel: 25, description: '+20% spell conversion & destruction.' },
+  { id: 'manaRate', name: 'Worship Resonance', parent: 'startingMana', baseCost: 8, costScale: 1.7, maxLevel: 25, description: '+25% Mana/sec across all planets.' },
+  { id: 'offlineEfficiency', name: 'Eternal Vigil', parent: 'manaRate', baseCost: 12, costScale: 1.8, maxLevel: 10, description: '+10% offline passive progress.' },
+  // Branch 2: Way of War
+  { id: 'spellPower', name: 'Arcane Surge', baseCost: 8, costScale: 1.75, maxLevel: 25, description: '+20% spell power and conversion speed.' },
+  { id: 'castRange', name: 'Astral Reach', parent: 'spellPower', baseCost: 6, costScale: 1.55, maxLevel: 15, description: '+15% Shaman cast range (Planets 1-11).' },
+  { id: 'tempestForce', name: 'Tempest Force', parent: 'spellPower', baseCost: 10, costScale: 1.7, maxLevel: 15, description: '+15% Blast radius and knockback force.' },
+  // Branch 3: Way of the Village
   { id: 'popCap', name: 'Fertile Huts', baseCost: 7, costScale: 1.65, maxLevel: 20, description: '+5 max follower capacity per planet.' },
-  { id: 'offlineEfficiency', name: 'Eternal Vigil', baseCost: 12, costScale: 1.8, maxLevel: 10, description: '+10% offline passive progress.' },
+  { id: 'timberMastery', name: 'Timber Mastery', parent: 'popCap', baseCost: 9, costScale: 1.65, maxLevel: 15, description: '+20% Brave tree-chopping and hut building speed.' },
 ];
