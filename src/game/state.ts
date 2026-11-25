@@ -272,7 +272,7 @@ export function orderBuilding(
     return true;
   }
   if (kind === 'guard_tower') {
-    if (p.towersOrdered >= 4 || p.hutsBuilt < 1) return false;
+    if (p.towersOrdered >= 4 || !p.fireWarriorHutBuilt) return false;
     const cost = BUILDING_COSTS.guard_tower * (p.towersOrdered + 1);
     if (state.mana < cost) return false;
     state.mana -= cost;
@@ -362,7 +362,8 @@ export function applyCombatResult(
 export function castSpell(
   state: GameState,
   spellId: string,
-  distanceFromShamanPx: number
+  distanceFromShamanPx: number,
+  rangeMult = 1
 ): { ok: boolean; reason?: string; converted?: number; destroyed?: number } {
   const spell = SPELLS.find((s) => s.id === spellId);
   if (!spell) return { ok: false, reason: 'Unknown spell' };
@@ -371,7 +372,7 @@ export function castSpell(
   const cd = state.spellCooldowns[spell.id] ?? 0;
   if (cd > 0) return { ok: false, reason: `Cooldown ${cd.toFixed(1)}s` };
 
-  const range = getCastRangePx(state, state.activePlanetId);
+  const range = getCastRangePx(state, state.activePlanetId) * rangeMult;
   if (distanceFromShamanPx > range) {
     return { ok: false, reason: 'Out of Shaman cast range' };
   }

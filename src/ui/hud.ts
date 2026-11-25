@@ -686,9 +686,9 @@ export class HudController {
             </button>
           </div>
           <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
-            <div><strong>Guard Tower (${p.towersBuilt}/4)</strong><br/><small>Garrisons Fire Warriors for long range</small></div>
-            <button class="btn" ${p.towersOrdered >= 4 || p.hutsBuilt < 1 || this.state.mana < towerCost ? 'disabled' : ''} data-order="guard_tower">
-              ${p.towersBuilt >= 4 ? 'Maxed' : p.towersOrdered > p.towersBuilt ? 'Building...' : `${towerCost} M`}
+            <div><strong>Guardhouse (${p.towersBuilt}/4)</strong><br/><small>Enhances Fire Warrior, Shaman &amp; Preacher range</small></div>
+            <button class="btn" ${p.towersOrdered >= 4 || !p.fireWarriorHutBuilt || this.state.mana < towerCost ? 'disabled' : ''} data-order="guard_tower">
+              ${p.towersBuilt >= 4 ? 'Maxed' : p.towersOrdered > p.towersBuilt ? 'Building...' : !p.fireWarriorHutBuilt ? 'Need Fire Hut' : `${towerCost} M`}
             </button>
           </div>
         </div>

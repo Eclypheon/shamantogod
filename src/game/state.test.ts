@@ -50,6 +50,12 @@ describe('Shaman to God simulation', () => {
     onBuildingConstructed(state, 'warrior_hut');
     expect(state.planets[1].warriorHutBuilt).toBe(true);
     expect(state.planets[1].warriors).toBe(1); // 10% of 10
+
+    // Guardhouse requires Fire Warrior Hut first
+    expect(orderBuilding(state, 1, 'guard_tower')).toBe(false);
+    onBuildingConstructed(state, 'temple');
+    onBuildingConstructed(state, 'firewarrior_hut');
+    expect(orderBuilding(state, 1, 'guard_tower')).toBe(true);
   });
 
   it('computes 50/50 Dominance % from loyal pop share and enemy huts destroyed', () => {

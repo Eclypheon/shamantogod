@@ -136,7 +136,10 @@ def build_unit_atlas(zf: zipfile.ZipFile):
         for d in [1, 3, 5, 7]:
             add_clip(f"BlueSpy/SpyRun{d}.gif", f"spy_{tribe}_run_d{d}", tribe, source_blue=True)
 
-    # Single-direction Preachers, Fire Warriors, Wildmen
+    # Single-direction Preachers, Fire Warriors, Wildmen, Warrior standing idle
+    for tribe in TRIBE_TARGETS:
+        add_clip("Warriors/RedWarriorPray.gif", f"warrior_{tribe}_idle", tribe)
+
     add_clip("Preachers/BluePray.gif", "preacher_blue_pray")
     add_clip("Preachers/RedArmUp.gif", "preacher_red_pray")
     add_clip("Preachers/GreenArmsBook.gif", "preacher_green_pray")
@@ -320,17 +323,58 @@ def draw_populous_tree(stump: bool = False) -> Image.Image:
     return img
 
 
+def colorize_neutral_banners(img: Image.Image, target_rgb: tuple[int, int, int]) -> Image.Image:
+    """Tint neutral grey/white cloth banners on custom building PNGs to tribe color while keeping wood/thatch/fire untouched."""
+    rgba = img.convert("RGBA")
+    px = rgba.load()
+    w, h = rgba.size
+    tr, tg, tb = target_rgb
+    for y in range(h):
+        for x in range(w):
+            r, g, b, a = px[x, y]
+            if a < 40:
+                continue
+            hi = max(r, g, b)
+            lo = min(r, g, b)
+            sat = hi - lo
+            lum = (r + g + b) / 3.0
+            # Target neutral light-grey/white cloth banners & pennants (skip warm brown wood/yellow thatch/orange fire)
+            if sat < 26 and lum > 95 and lum < 245:
+                scale = lum / 205.0
+                px[x, y] = (
+                    min(255, int(tr * scale)),
+                    min(255, int(tg * scale)),
+                    min(255, int(tb * scale)),
+                    a,
+                )
+    return rgba
+
+
+def load_custom_building(filename: str, size: tuple[int, int], tribe_rgb: tuple[int, int, int]) -> Image.Image:
+    src_path = ROOT / "assets_src" / "buildings" / filename
+    im = Image.open(src_path).convert("RGBA")
+    bbox = im.getbbox()
+    if bbox:
+        im = im.crop(bbox)
+    im.thumbnail(size, Image.LANCZOS)
+    tinted = colorize_neutral_banners(im, tribe_rgb)
+    canvas = Image.new("RGBA", size, (0, 0, 0, 0))
+    canvas.paste(tinted, ((size[0] - tinted.width) // 2, size[1] - tinted.height), tinted)
+    return canvas
+
+
 def build_world_atlas():
     frames: dict[str, Image.Image] = {}
     for tribe, rgb in TRIBE_TARGETS.items():
+        hut_img = load_custom_building("hut.png", (88, 88), rgb)
         for lv in (1, 2, 3):
-            frames[f"hut_{lv}_{tribe}"] = draw_iso_hut(rgb, lv, "hut")
+            frames[f"hut_{lv}_{tribe}"] = hut_img
         frames[f"hut_plan_{tribe}"] = draw_iso_hut(rgb, 1, "plan")
         frames[f"hut_frame_{tribe}"] = draw_iso_hut(rgb, 1, "frame")
-        frames[f"temple_{tribe}"] = draw_iso_hut(rgb, 2, "temple")
-        frames[f"warrior_hut_{tribe}"] = draw_iso_hut(rgb, 2, "warrior_hut")
-        frames[f"firewarrior_hut_{tribe}"] = draw_iso_hut(rgb, 2, "firewarrior_hut")
-        frames[f"guard_tower_{tribe}"] = draw_iso_hut(rgb, 2, "tower")
+        frames[f"temple_{tribe}"] = load_custom_building("temple.png", (102, 102), rgb)
+        frames[f"warrior_hut_{tribe}"] = load_custom_building("warrior hut.png", (102, 102), rgb)
+        frames[f"firewarrior_hut_{tribe}"] = load_custom_building("firewarrior hut.png", (102, 102), rgb)
+        frames[f"guard_tower_{tribe}"] = load_custom_building("guardhouse.png", (86, 106), rgb)
 
     frames["tree_full"] = draw_populous_tree(stump=False)
     frames["tree_stump"] = draw_populous_tree(stump=True)
@@ -362,7 +406,7 @@ def build_world_atlas():
         dv.ellipse([10, 10, 22, 22], fill=(255, 255, 255, 200))
         frames[name] = v
 
-    pack_atlas(frames, ATLAS_DIR / "world.png", ATLAS_DIR / "world.json", max_width=512)
+    pack_atlas(frames, ATLAS_DIR / "world.png", ATLAS_DIR / "world.json", max_width=1024)
 
 
 def build_audio(zf: zipfile.ZipFile):
