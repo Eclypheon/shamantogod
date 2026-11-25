@@ -18,6 +18,11 @@ import {
 
 export type DrawerTab = 'none' | 'tribe' | 'planets' | 'meta' | 'telemetry';
 
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
+}
+
 export class HudController {
   private root: HTMLElement;
   private state: GameState;
@@ -25,12 +30,38 @@ export class HudController {
   private toastMsg = '';
   private toastTimer = 0;
   private onJoystick: (x: number, y: number) => void;
+  private deferredInstallPrompt: BeforeInstallPromptEvent | null = null;
+  private installDismissed = false;
+  private rotateDismissed = false;
 
   constructor(root: HTMLElement, state: GameState, onJoystick: (x: number, y: number) => void) {
     this.root = root;
     this.state = state;
     this.onJoystick = onJoystick;
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      this.deferredInstallPrompt = e as BeforeInstallPromptEvent;
+      this.render();
+    });
+    window.addEventListener('appinstalled', () => {
+      this.deferredInstallPrompt = null;
+      this.installDismissed = true;
+      this.render();
+    });
+
     this.render();
+  }
+
+  private isStandalone(): boolean {
+    return (
+      window.matchMedia('(display-mode: standalone)').matches ||
+      Boolean((navigator as Navigator & { standalone?: boolean }).standalone)
+    );
+  }
+
+  private isIos(): boolean {
+    return /iPad|iPhone|iPod/.test(navigator.userAgent);
   }
 
   showToast(msg: string): void {
@@ -73,7 +104,13 @@ export class HudController {
       </div>
 
       ${this.toastMsg ? `<div class="toast">${this.toastMsg}</div>` : ''}
-      <div class="landscape-hint">Rotate to landscape for best PWA play</div>
+      ${this.renderInstallBanner()}
+      <div class="landscape-overlay ${this.rotateDismissed ? 'dismissed' : ''}">
+        <div style="font-size:36px;">📱↻</div>
+        <strong style="font-size:16px;color:var(--gold);">Tilt your screen to landscape</strong>
+        <span style="font-size:13px;color:var(--muted);">Shaman to God is built for landscape play. Rotate your device to continue.</span>
+        <button class="btn" data-action="dismiss-rotate">Continue anyway</button>
+      </div>
 
       <div class="hud-panel drawer ${this.activeTab !== 'none' ? 'open' : ''}">
         ${this.renderDrawerContent()}
@@ -101,6 +138,24 @@ export class HudController {
 
     this.bindEvents();
     void this.toastTimer;
+  }
+
+  private renderInstallBanner(): string {
+    if (this.installDismissed || this.isStandalone()) return '';
+    if (this.deferredInstallPrompt) {
+      return `<div class="install-banner">
+        <span>Install <strong>Shaman to God</strong> as a landscape PWA</span>
+        <button class="btn prestige" data-action="install-pwa">Install</button>
+        <button class="btn" data-action="dismiss-install">Later</button>
+      </div>`;
+    }
+    if (this.isIos()) {
+      return `<div class="install-banner">
+        <span>Install PWA: tap <strong>Share</strong> then <strong>Add to Home Screen</strong></span>
+        <button class="btn" data-action="dismiss-install">Got it</button>
+      </div>`;
+    }
+    return '';
   }
 
   private renderDrawerContent(): string {
@@ -281,6 +336,35 @@ export class HudController {
       muteBtn.onclick = () => {
         this.state.muted = !this.state.muted;
         saveGame(this.state);
+        this.render();
+      };
+    }
+
+    const installBtn = this.root.querySelector<HTMLButtonElement>('[data-action="install-pwa"]');
+    if (installBtn && this.deferredInstallPrompt) {
+      installBtn.onclick = async () => {
+        await this.deferredInstallPrompt!.prompt();
+        const choice = await this.deferredInstallPrompt!.userChoice;
+        if (choice.outcome === 'accepted') {
+          this.deferredInstallPrompt = null;
+          this.installDismissed = true;
+        }
+        this.render();
+      };
+    }
+
+    const dismissInstallBtn = this.root.querySelector<HTMLButtonElement>('[data-action="dismiss-install"]');
+    if (dismissInstallBtn) {
+      dismissInstallBtn.onclick = () => {
+        this.installDismissed = true;
+        this.render();
+      };
+    }
+
+    const dismissRotateBtn = this.root.querySelector<HTMLButtonElement>('[data-action="dismiss-rotate"]');
+    if (dismissRotateBtn) {
+      dismissRotateBtn.onclick = () => {
+        this.rotateDismissed = true;
         this.render();
       };
     }
