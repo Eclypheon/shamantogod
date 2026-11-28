@@ -384,14 +384,16 @@ def build_world_atlas():
     frames["tree_full"] = draw_populous_tree(stump=False)
     frames["tree_stump"] = draw_populous_tree(stump=True)
 
-    # Ancient Mana Obelisk (walkable exploration shrine for burst Mana)
-    ob = Image.new("RGBA", (36, 56), (0, 0, 0, 0))
-    dob = ImageDraw.Draw(ob)
-    dob.ellipse([6, 44, 30, 54], fill=(24, 18, 12, 120))
-    dob.polygon([(18, 4), (11, 16), (10, 48), (26, 48), (25, 16)], fill=(120, 124, 130, 255), outline=(58, 62, 68, 255))
-    dob.polygon([(18, 10), (14, 22), (18, 34), (22, 22)], fill=(90, 225, 255, 240))
-    dob.ellipse([15, 19, 21, 25], fill=(240, 255, 255, 255))
-    frames["obelisk"] = ob
+    # Custom Ancient Mana Obelisk from assets_src/buildings/obelisk.png
+    ob_src = ROOT / "assets_src" / "buildings" / "obelisk.png"
+    ob_im = Image.open(ob_src).convert("RGBA")
+    ob_bbox = ob_im.getbbox()
+    if ob_bbox:
+        ob_im = ob_im.crop(ob_bbox)
+    ob_im.thumbnail((84, 108), Image.LANCZOS)
+    ob_canvas = Image.new("RGBA", (84, 108), (0, 0, 0, 0))
+    ob_canvas.paste(ob_im, ((84 - ob_im.width) // 2, 108 - ob_im.height), ob_im)
+    frames["obelisk"] = ob_canvas
 
     # Stone Head monument
     sh = Image.new("RGBA", (40, 48), (0, 0, 0, 0))

@@ -14,7 +14,6 @@ import {
   isMetaNodeUnlocked,
   isMetaNodeVisible,
   isSpellUnlocked,
-  orderBuilding,
   prestigeToPlanet,
   resetGame,
   saveGame,
@@ -49,6 +48,7 @@ export class HudController {
   private onResetState: (fresh: GameState) => void;
   private onBeginPlay: () => void;
   private onSetPaused: (paused: boolean) => void;
+  private onMuteChanged: (muted: boolean) => void;
   private deferredInstallPrompt: BeforeInstallPromptEvent | null = null;
   private installDismissed = false;
   private lastSpellSignature = '';
@@ -65,6 +65,7 @@ export class HudController {
   private elBuffs!: HTMLElement;
   private elAscendBtn!: HTMLButtonElement;
   private elTabBtns!: NodeListOf<HTMLButtonElement>;
+  private elSpellInfo!: HTMLElement;
   private elSpellDock!: HTMLElement;
   private elDrawerBackdrop!: HTMLElement;
   private elDrawer!: HTMLElement;
@@ -82,7 +83,8 @@ export class HudController {
     onJoystick: (x: number, y: number) => void,
     onResetState: (fresh: GameState) => void,
     onBeginPlay: () => void,
-    onSetPaused: (paused: boolean) => void
+    onSetPaused: (paused: boolean) => void,
+    onMuteChanged: (muted: boolean) => void
   ) {
     this.root = root;
     this.state = state;
@@ -90,6 +92,7 @@ export class HudController {
     this.onResetState = onResetState;
     this.onBeginPlay = onBeginPlay;
     this.onSetPaused = onSetPaused;
+    this.onMuteChanged = onMuteChanged;
 
     this.mountShell();
 
@@ -158,6 +161,7 @@ export class HudController {
         <div class="joystick-knob" id="hud-joystick-knob"></div>
       </div>
 
+      <div class="papyrus spell-info" id="hud-spell-info"></div>
       <nav class="papyrus spell-dock" id="hud-spells"></nav>
 
       <section class="title-screen open" id="hud-title"></section>
@@ -183,6 +187,7 @@ export class HudController {
     this.elBuffs = this.root.querySelector('#hud-buffs')!;
     this.elAscendBtn = this.root.querySelector('#hud-ascend')!;
     this.elTabBtns = this.root.querySelectorAll('[data-tab]');
+    this.elSpellInfo = this.root.querySelector('#hud-spell-info')!;
     this.elSpellDock = this.root.querySelector('#hud-spells')!;
     this.elDrawerBackdrop = this.root.querySelector('#hud-drawer-backdrop')!;
     this.elDrawer = this.root.querySelector('#hud-drawer')!;
@@ -223,10 +228,6 @@ export class HudController {
       btn.addEventListener('click', () => {
         const t = btn.dataset.tab as DrawerTab;
         this.activeTab = this.activeTab === t ? 'none' : t;
-        if (t === 'tribe' && this.activeTab === 'tribe' && this.state.tutorialStep === 2) {
-          this.state.tutorialStep = 3;
-          saveGame(this.state);
-        }
         this.renderDrawer();
         this.syncTabs();
         this.syncCoach();
@@ -237,8 +238,8 @@ export class HudController {
       this.activeTab = 'none';
       this.syncTabs();
       this.pantheonOpen = true;
-      if (this.state.tutorialStep === 5) {
-        this.state.tutorialStep = 6;
+      if (this.state.tutorialStep === 3) {
+        this.state.tutorialStep = 4;
         saveGame(this.state);
       }
       this.updatePauseState();
@@ -257,7 +258,7 @@ export class HudController {
       const nextId = this.state.activePlanetId + 1;
       const res = prestigeToPlanet(this.state, nextId);
       if (res.ok) {
-        if (this.state.tutorialStep === 4) this.state.tutorialStep = 5;
+        if (this.state.tutorialStep === 2) this.state.tutorialStep = 3;
         saveGame(this.state);
         const essMsg = res.bankedEssence > 0 ? ` (+${res.bankedEssence} Essence)` : '';
         this.showToast(`Ascended to Planet ${ROMAN[nextId - 1] ?? nextId}${essMsg}`);
@@ -320,6 +321,7 @@ export class HudController {
 
     this.elTitleScreen.querySelector('#btn-title-mute')?.addEventListener('click', () => {
       this.state.muted = !this.state.muted;
+      this.onMuteChanged(this.state.muted);
       saveGame(this.state);
       this.renderTitleScreen();
     });
@@ -499,16 +501,16 @@ export class HudController {
     this.elPantheonModal.querySelectorAll<HTMLButtonElement>('[data-pnode]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const id = btn.dataset.pnode as MetaUpgradeConfig['id'];
-        if (id === 'popCap' && this.state.tutorialStep === 6) {
+        if (id === 'popCap' && this.state.tutorialStep === 4) {
           this.selectedMetaId = 'popCap';
-          this.state.tutorialStep = 7;
+          this.state.tutorialStep = 5;
           saveGame(this.state);
           this.renderPantheon();
           this.syncCoach();
           return;
         }
         if (this.selectedMetaId === id && buyMetaUpgrade(this.state, id)) {
-          if (id === 'popCap' && this.state.tutorialStep === 7) this.state.tutorialStep = 8;
+          if (id === 'popCap' && this.state.tutorialStep === 5) this.state.tutorialStep = 6;
           saveGame(this.state);
           this.showToast(`Blessed ${META_UPGRADES.find((u) => u.id === id)?.name}!`);
           this.sync();
@@ -522,8 +524,8 @@ export class HudController {
 
     this.elPantheonModal.querySelector('#btn-bless-selected')?.addEventListener('click', () => {
       if (buyMetaUpgrade(this.state, this.selectedMetaId)) {
-        if (this.selectedMetaId === 'popCap' && this.state.tutorialStep === 7) {
-          this.state.tutorialStep = 8;
+        if (this.selectedMetaId === 'popCap' && this.state.tutorialStep === 5) {
+          this.state.tutorialStep = 6;
         }
         saveGame(this.state);
         this.showToast(`Blessed ${selected.name}!`);
@@ -687,66 +689,46 @@ export class HudController {
       this.pointCoachAt(
         '[data-spell="blast"]',
         'Step II · Blast Spell',
-        'Tap Blast to select it, then tap enemies to launch them. You will learn more spells on later worlds.',
+        'Tap Blast to select it, then tap enemies to launch them. Your Braves will auto-build Huts and Warrior Training Huts as your tribe grows.',
         'above'
       );
       return;
     }
 
-    if (this.state.tutorialStep === 2 && this.state.activePlanetId === 1 && p1.hutsBuilt >= 1 && p1.loyalPop >= BUILDING_FOLLOWER_REQS.warrior_hut && !p1.warriorHutOrdered) {
-      this.pointCoachAt(
-        '[data-tab="tribe"]',
-        'Step III · Tribe Decrees',
-        'You reached 4 followers! Tap Tribe to open your building decrees.',
-        'below'
-      );
-      return;
-    }
-
-    if (this.state.tutorialStep === 3 && this.activeTab === 'tribe' && !p1.warriorHutOrdered) {
-      this.pointCoachAt(
-        '[data-order="warrior_hut"]',
-        'Step III · Warrior Hut',
-        'Tap Order so Braves build your Warrior Training Hut and train inside.',
-        'left'
-      );
-      return;
-    }
-
-    if (this.state.tutorialStep === 4 && this.state.planets[2]?.unlocked && this.state.activePlanetId === 1) {
+    if (this.state.tutorialStep === 2 && this.state.planets[2]?.unlocked && this.state.activePlanetId === 1) {
       this.pointCoachAt(
         '#hud-ascend',
-        'Step IV · Prestige',
+        'Step III · Prestige',
         'Planet I is conquered! Tap Ascend II to travel to Planet II and bank Divine Essence.',
         'below'
       );
       return;
     }
 
-    if (this.state.tutorialStep === 5 && this.state.activePlanetId >= 2 && !this.pantheonOpen) {
+    if (this.state.tutorialStep === 3 && this.state.activePlanetId >= 2 && !this.pantheonOpen) {
       this.pointCoachAt(
         '#hud-open-pantheon',
-        'Step V · Open Pantheon',
+        'Step IV · Open Pantheon',
         'You banked Divine Essence! Tap Pantheon to open the upgrade tree.',
         'below'
       );
       return;
     }
 
-    if (this.state.tutorialStep === 6 && this.pantheonOpen) {
+    if (this.state.tutorialStep === 4 && this.pantheonOpen) {
       this.pointCoachAt(
         '[data-pnode="popCap"]',
-        'Step V · Select Fertile Huts',
+        'Step IV · Select Fertile Huts',
         'Tap Fertile Huts as your first Pantheon unlock.',
         'above'
       );
       return;
     }
 
-    if (this.state.tutorialStep === 7 && this.pantheonOpen && this.selectedMetaId === 'popCap') {
+    if (this.state.tutorialStep === 5 && this.pantheonOpen && this.selectedMetaId === 'popCap') {
       this.pointCoachAt(
         '#btn-bless-selected',
-        'Step V · Bless Fertile Huts',
+        'Step IV · Bless Fertile Huts',
         'Now tap Bless to permanently raise your follower cap and unlock deeper Village nodes!',
         'above'
       );
@@ -858,7 +840,13 @@ export class HudController {
       if (!btn || !costEl) continue;
       const cd = this.state.spellCooldowns[s.id] ?? 0;
       btn.classList.toggle('active', this.state.selectedSpellId === s.id);
-      costEl.textContent = cd > 0 ? `${cd.toFixed(1)}s` : s.isStoneHead ? 'Stone' : `${s.manaCost} M`;
+      costEl.textContent = cd > 0 ? `${cd.toFixed(1)}s` : s.isStoneHead ? 'Free' : `${s.manaCost} M`;
+    }
+
+    const activeSpell = unlocked.find((s) => s.id === this.state.selectedSpellId) ?? unlocked[0];
+    if (activeSpell) {
+      const tag = activeSpell.isStoneHead ? 'Free · Stone Head' : `${activeSpell.manaCost} Mana`;
+      this.elSpellInfo.innerHTML = `<strong>${activeSpell.name}</strong> <span style="opacity:0.75;">(${tag})</span> · ${activeSpell.description}`;
     }
   }
 
@@ -915,49 +903,50 @@ export class HudController {
     let body = '';
 
     if (this.activeTab === 'tribe') {
-      title = `Tribe Decrees · Planet ${ROMAN[cfg.id - 1] ?? cfg.id}`;
+      title = `Tribe Ledger · Planet ${ROMAN[cfg.id - 1] ?? cfg.id}`;
       const hasTempleUnlock = this.state.metaLevels.unlockTemple > 0;
       const hasFireUnlock = this.state.metaLevels.unlockFireWarriors > 0;
       const hasGuardUnlock = this.state.metaLevels.unlockGuardhouse > 0;
+      const badge = (built: boolean, ordered: boolean, reqLabel: string) =>
+        built
+          ? '<span style="font-weight:700;color:#2e6b34;">Built</span>'
+          : ordered
+            ? '<span style="font-weight:700;color:#9b5b14;">Auto-building...</span>'
+            : `<span style="opacity:0.7;">Auto at ${reqLabel}</span>`;
+
       body = `
         <div class="scroll-card">
-          Huts: <strong>${p.hutsBuilt}</strong> · Followers: <strong>${p.loyalPop}</strong> · Mana/sec: <strong>+${getPlanetManaPerSec(this.state, cfg.id).toFixed(1)}</strong><br/>
-          <small>${p.hutsBuilt < 3 ? 'Braves chop trees to raise Huts (1 per 6 followers). At 3 Huts, pairs enter Huts to breed.' : 'Pairs of Braves breed in Huts while others train, repair, or fight.'}</small>
+          Huts: <strong>${p.hutsBuilt}</strong> · Followers: <strong>${p.loyalPop}</strong> (Braves ${p.braves}, Warriors ${p.warriors}, Preachers ${p.preachers}, Fire ${p.fireWarriors})<br/>
+          Mana/sec: <strong>+${getPlanetManaPerSec(this.state, cfg.id).toFixed(1)}</strong><br/>
+          <small>${p.hutsBuilt < 3 ? 'Braves chop trees to raise Huts (1 per 6 followers). At 3 Huts, pairs enter Huts to breed.' : 'Pairs of Braves breed in Huts while others auto-build, train, repair, or fight.'}</small>
         </div>
-        <div class="scroll-card" style="display:flex;flex-direction:column;gap:7px;">
+        <div class="scroll-card" style="display:flex;flex-direction:column;gap:6px;">
+          <div style="font-size:11px;opacity:0.8;"><strong>Automatic Village Expansion</strong> (no manual clicking needed)</div>
           <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
-            <div><strong>Warrior Training Hut</strong><br/><small>Requires 1 Hut &amp; ${BUILDING_FOLLOWER_REQS.warrior_hut} followers</small></div>
-            <button class="btn ${p.warriorHutBuilt ? 'active' : ''}" ${p.warriorHutOrdered || p.warriorHutBuilt || p.hutsBuilt < 1 || p.loyalPop < BUILDING_FOLLOWER_REQS.warrior_hut ? 'disabled' : ''} data-order="warrior_hut">
-              ${p.warriorHutBuilt ? 'Built' : p.warriorHutOrdered ? 'Building...' : 'Order'}
-            </button>
+            <div><strong>Warrior Training Hut</strong><br/><small>Trains Braves into melee Warriors</small></div>
+            ${badge(p.warriorHutBuilt, p.warriorHutOrdered, `${BUILDING_FOLLOWER_REQS.warrior_hut} followers`)}
           </div>
           ${
             hasTempleUnlock
               ? `<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
-                  <div><strong>Temple (Preachers)</strong><br/><small>Requires Warrior Hut &amp; ${BUILDING_FOLLOWER_REQS.temple} followers</small></div>
-                  <button class="btn ${p.templeBuilt ? 'active' : ''}" ${p.templeOrdered || p.templeBuilt || !p.warriorHutBuilt || p.loyalPop < BUILDING_FOLLOWER_REQS.temple ? 'disabled' : ''} data-order="temple">
-                    ${p.templeBuilt ? 'Built' : p.templeOrdered ? 'Building...' : 'Order'}
-                  </button>
+                  <div><strong>Temple (Preachers)</strong><br/><small>Trains Preachers to convert rivals</small></div>
+                  ${badge(p.templeBuilt, p.templeOrdered, `${BUILDING_FOLLOWER_REQS.temple} followers`)}
                 </div>`
-              : `<div style="font-size:11px;opacity:0.7;">Temple, Fire Warriors &amp; Guardhouses unlock in the <strong>Pantheon</strong> tree.</div>`
+              : `<div style="font-size:11px;opacity:0.7;">Temple, Fire Warriors &amp; Guardhouses unlock in the <strong>Pantheon</strong> tree and auto-build once unlocked.</div>`
           }
           ${
             hasFireUnlock
               ? `<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
-                  <div><strong>Fire Warrior Hut</strong><br/><small>Requires Temple &amp; ${BUILDING_FOLLOWER_REQS.firewarrior_hut} followers</small></div>
-                  <button class="btn ${p.fireWarriorHutBuilt ? 'active' : ''}" ${p.fireWarriorHutOrdered || p.fireWarriorHutBuilt || !p.templeBuilt || p.loyalPop < BUILDING_FOLLOWER_REQS.firewarrior_hut ? 'disabled' : ''} data-order="firewarrior_hut">
-                    ${p.fireWarriorHutBuilt ? 'Built' : p.fireWarriorHutOrdered ? 'Building...' : 'Order'}
-                  </button>
+                  <div><strong>Fire Warrior Hut</strong><br/><small>Trains ranged fireball casters</small></div>
+                  ${badge(p.fireWarriorHutBuilt, p.fireWarriorHutOrdered, `${BUILDING_FOLLOWER_REQS.firewarrior_hut} followers`)}
                 </div>`
               : ''
           }
           ${
             hasGuardUnlock
               ? `<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
-                  <div><strong>Guardhouse (${p.towersBuilt}/4)</strong><br/><small>Requires Fire Hut &amp; ${BUILDING_FOLLOWER_REQS.guard_tower} followers</small></div>
-                  <button class="btn" ${p.towersOrdered >= 4 || !p.fireWarriorHutBuilt || p.loyalPop < BUILDING_FOLLOWER_REQS.guard_tower ? 'disabled' : ''} data-order="guard_tower">
-                    ${p.towersBuilt >= 4 ? 'Maxed' : p.towersOrdered > p.towersBuilt ? 'Building...' : 'Order'}
-                  </button>
+                  <div><strong>Guardhouses (${p.towersBuilt}/4)</strong><br/><small>Boosts Fire Warrior, Shaman &amp; Preacher range</small></div>
+                  ${badge(p.towersBuilt >= 4, p.towersOrdered > p.towersBuilt, `${BUILDING_FOLLOWER_REQS.guard_tower} followers`)}
                 </div>`
               : ''
           }
@@ -970,6 +959,10 @@ export class HudController {
               </div>`
             : ''
         }
+        <div class="scroll-card" style="display:flex;justify-content:space-between;align-items:center;">
+          <span><strong>Audio &amp; Music</strong></span>
+          <button class="btn" data-action="mute">${this.state.muted ? 'Sound: Off' : 'Sound: On'}</button>
+        </div>
       `;
     } else if (this.activeTab === 'planets') {
       title = 'Kaelis Solar System';
@@ -1022,21 +1015,6 @@ export class HudController {
       });
     });
 
-    this.elDrawer.querySelectorAll<HTMLButtonElement>('[data-order]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const kind = btn.dataset.order as 'warrior_hut' | 'temple' | 'firewarrior_hut' | 'guard_tower';
-        if (orderBuilding(this.state, this.state.activePlanetId, kind)) {
-          if (kind === 'warrior_hut' && this.state.tutorialStep === 3) {
-            this.state.tutorialStep = 4;
-          }
-          saveGame(this.state);
-          this.showToast('Blueprint ordered — Braves will construct it!');
-          this.renderDrawer();
-          this.sync();
-        }
-      });
-    });
-
     this.elDrawer.querySelector('[data-action="alliance"]')?.addEventListener('click', () => {
       if (formAlliance(this.state, this.state.activePlanetId)) {
         saveGame(this.state);
@@ -1044,6 +1022,13 @@ export class HudController {
         this.renderDrawer();
         this.sync();
       }
+    });
+
+    this.elDrawer.querySelector('[data-action="mute"]')?.addEventListener('click', () => {
+      this.state.muted = !this.state.muted;
+      this.onMuteChanged(this.state.muted);
+      saveGame(this.state);
+      this.renderDrawer();
     });
   }
 }

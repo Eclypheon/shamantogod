@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import './style.css';
+import { AncientAmbience } from './game/ambientAudio';
 import { PlanetScene } from './game/PlanetScene';
 import { applyOfflineProgress, loadGame, saveGame, stepSimulation } from './game/state';
 import { HudController } from './ui/hud';
@@ -14,6 +15,7 @@ if ('serviceWorker' in navigator) {
 
 let state = loadGame();
 const offline = applyOfflineProgress(state);
+const ambience = new AncientAmbience();
 
 const hudRoot = document.getElementById('hud')!;
 let sceneRef: PlanetScene | null = null;
@@ -26,8 +28,12 @@ const hud = new HudController(
     state = freshState;
     sceneRef?.replaceState(freshState);
   },
-  () => sceneRef?.triggerOpeningConvert(),
-  (paused) => sceneRef?.setPaused(paused)
+  () => {
+    ambience.start(state.muted);
+    sceneRef?.triggerOpeningConvert();
+  },
+  (paused) => sceneRef?.setPaused(paused),
+  (muted) => ambience.setMuted(muted)
 );
 
 if (offline.manaGained >= 1) {

@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { SPELLS } from './data';
 import {
   applyCombatResult,
+  autoOrderUnlockedBuildings,
   castSpell,
   claimObeliskMana,
   getCastRangePx,
@@ -515,28 +516,45 @@ export class PlanetScene extends Phaser.Scene {
     this.shaman.setPosition(WORLD_W / 2, WORLD_H / 2);
     this.enemyRaidTimer = cfg.id === 1 ? 45 : Math.max(12, 30 - cfg.id * 1.5);
 
-    // Terrain
+    // Rich layered Populous island terrain (deep sea -> shoal -> sandy shore -> organic sunlit grass -> village paths)
     this.terrainGfx.clear();
     this.terrainGfx.fillStyle(cfg.waterColor, 1);
     this.terrainGfx.fillRect(0, 0, WORLD_W, WORLD_H);
-    this.terrainGfx.fillStyle(0x9c8257, 1);
+
+    // Coastal shoal glow + subtle wave rings
+    this.terrainGfx.fillStyle(0x2a7f9e, 0.32);
+    this.terrainGfx.fillEllipse(WORLD_W / 2, WORLD_H / 2, WORLD_W * 0.89, WORLD_H * 0.86);
+    this.terrainGfx.lineStyle(2, 0xcaf0f8, 0.14);
+    this.terrainGfx.strokeEllipse(WORLD_W / 2, WORLD_H / 2, WORLD_W * 0.87, WORLD_H * 0.84);
+
+    // Warm sandy beach rim
+    this.terrainGfx.fillStyle(0xc2a878, 1);
     this.terrainGfx.fillEllipse(WORLD_W / 2, WORLD_H / 2, WORLD_W * 0.85, WORLD_H * 0.82);
+
+    // Main organic terrain landmass with subtle sunlit plateaus
     this.terrainGfx.fillStyle(cfg.groundColor, 1);
     this.terrainGfx.fillEllipse(WORLD_W / 2, WORLD_H / 2, WORLD_W * 0.81, WORLD_H * 0.77);
+    this.terrainGfx.fillStyle(0xffffff, 0.06);
+    this.terrainGfx.fillEllipse(WORLD_W / 2 - 40, WORLD_H / 2 - 20, 420, 270);
+    this.terrainGfx.fillEllipse(WORLD_W / 2 + 340, WORLD_H / 2 - 40, 290, 200);
+    this.terrainGfx.fillEllipse(WORLD_W / 2 - 340, WORLD_H / 2 + 30, 260, 180);
 
-    this.terrainGfx.lineStyle(1, 0x000000, 0.08);
-    for (let gx = 200; gx < WORLD_W - 200; gx += 96) {
-      for (let gy = 160; gy < WORLD_H - 160; gy += 64) {
-        this.terrainGfx.strokePoints(
-          [
-            { x: gx, y: gy - 24 },
-            { x: gx + 48, y: gy },
-            { x: gx, y: gy + 24 },
-            { x: gx - 48, y: gy },
-          ],
-          true
-        );
-      }
+    // Soft packed-earth village center & paths leading toward Obelisks
+    this.terrainGfx.fillStyle(0x9b8054, 0.34);
+    this.terrainGfx.fillEllipse(WORLD_W / 2, WORLD_H / 2 + 12, 230, 145);
+    this.terrainGfx.lineStyle(12, 0x9b8054, 0.2);
+    this.terrainGfx.lineBetween(WORLD_W / 2, WORLD_H / 2, WORLD_W / 2 - 245, WORLD_H / 2 - 150);
+    this.terrainGfx.lineBetween(WORLD_W / 2, WORLD_H / 2, WORLD_W / 2 + 235, WORLD_H / 2 - 145);
+    this.terrainGfx.lineBetween(WORLD_W / 2, WORLD_H / 2, WORLD_W / 2, WORLD_H / 2 + 210);
+
+    // Subtle organic tufts & pebbles
+    this.terrainGfx.fillStyle(0x000000, 0.08);
+    for (let i = 0; i < 42; i++) {
+      const ang = i * 2.39996;
+      const r = 110 + (i % 7) * 68;
+      const px = WORLD_W / 2 + Math.cos(ang) * r * 1.15;
+      const py = WORLD_H / 2 + Math.sin(ang) * r * 0.68;
+      this.terrainGfx.fillEllipse(px, py, 16 + (i % 3) * 8, 8 + (i % 2) * 4);
     }
 
     // Only 7 sparse Populous trees (regrow slowly in 75s)
@@ -744,8 +762,37 @@ export class PlanetScene extends Phaser.Scene {
     syncSpec('firewarrior', p.fireWarriors);
   }
 
+  private spawnSparkBurst(x: number, y: number, color = 0xf4c95d, count = 10): void {
+    for (let i = 0; i < count; i++) {
+      const ang = (i / count) * Math.PI * 2 + Phaser.Math.FloatBetween(-0.2, 0.2);
+      const dist = Phaser.Math.Between(22, 48);
+      const dot = this.add.circle(x, y - 14, Phaser.Math.FloatBetween(2.2, 3.8), color, 0.95).setDepth(970);
+      this.tweens.add({
+        targets: dot,
+        x: x + Math.cos(ang) * dist,
+        y: y - 14 + Math.sin(ang) * dist * 0.75,
+        alpha: 0,
+        scale: 0.2,
+        duration: Phaser.Math.Between(420, 680),
+        ease: 'Cubic.easeOut',
+        onComplete: () => dot.destroy(),
+      });
+    }
+  }
+
   private ensureBuildSite(): void {
     if (this.buildSite || this.braves.length === 0) return;
+    // Automatically queue training buildings & guardhouses upon hitting follower & Pantheon requirements!
+    const autoOrdered = autoOrderUnlockedBuildings(this.state, this.state.activePlanetId);
+    if (autoOrdered) {
+      const names: Record<typeof autoOrdered, string> = {
+        warrior_hut: 'Warrior Training Hut',
+        temple: 'Temple (Preachers)',
+        firewarrior_hut: 'Fire Warrior Hut',
+        guard_tower: 'Guardhouse',
+      };
+      this.onToast(`Milestone! Braves are building a ${names[autoOrdered]}!`);
+    }
     const p = this.state.planets[this.state.activePlanetId];
 
     // Priority: ordered Training Buildings / Guard Towers first, then Huts
@@ -1299,6 +1346,7 @@ export class PlanetScene extends Phaser.Scene {
           this.wildmen.splice(i, 1);
           if (onWildmanConverted(this.state)) {
             this.spawnBrave(w.x, w.y);
+            this.spawnSparkBurst(w.x, w.y, 0x72efdd, 9);
             this.playSfx('birth', 0.35);
             this.spawnFloatingText(w.x, w.y, '+1 Brave', '#74c69d');
             this.ensureBuildSite();
@@ -1668,6 +1716,7 @@ export class PlanetScene extends Phaser.Scene {
               onBuildingConstructed(this.state, finishedKind);
               this.syncBuiltStructures();
               this.syncUnitActors();
+              this.spawnSparkBurst(bx, by - 10, 0xf4c95d, 14);
               this.playSfx('birth', 0.4);
               const label =
                 finishedKind === 'hut'
@@ -2421,6 +2470,7 @@ export class PlanetScene extends Phaser.Scene {
         if (this.shamanRespawnTimer <= 0 && Phaser.Math.Distance.Between(this.shaman.x, this.shaman.y, ob.x, ob.y) <= 48) {
           ob.cooldown = 35;
           const gain = claimObeliskMana(this.state, 45);
+          this.spawnSparkBurst(ob.x, ob.y - 20, 0x72efdd, 12);
           this.playSfx('convert', 0.35);
           this.spawnFloatingText(ob.x, ob.y - 26, `+${gain} Mana!`, '#72efdd');
           this.onHudSync();

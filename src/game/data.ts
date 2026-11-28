@@ -105,10 +105,10 @@ export const SPELLS: SpellConfig[] = [
   { id: 'volcano', name: 'Volcano', manaCost: 950, cooldownSec: 18, isStoneHead: false, unlockPlanet: 13, radius: 210, sound: 'volcano', vfx: 'vfx_volcano', kind: 'damage', description: 'Cataclysmic eruption devastating rival bases.' },
 
   // Stone Head cooldown shot-spells (0 Mana)
-  { id: 'bloodlust', name: 'Bloodlust', manaCost: 0, cooldownSec: 22, isStoneHead: true, unlockPlanet: 2, radius: 130, sound: 'attack', vfx: 'vfx_fireball', kind: 'buff', description: 'Stone Head: double follower combat speed.' },
-  { id: 'teleport', name: 'Teleport', manaCost: 0, cooldownSec: 18, isStoneHead: true, unlockPlanet: 4, radius: 48, sound: 'shaman_return', vfx: 'vfx_angel', kind: 'teleport', description: 'Stone Head: blink Shaman to cursor.' },
-  { id: 'ghost_army', name: 'Ghost Army', manaCost: 0, cooldownSec: 26, isStoneHead: true, unlockPlanet: 6, radius: 110, sound: 'swarm', vfx: 'vfx_convert', kind: 'summon', description: 'Stone Head: decoy squad absorbs swarm hits.' },
-  { id: 'armageddon', name: 'Armageddon', manaCost: 0, cooldownSec: 45, isStoneHead: true, unlockPlanet: 11, radius: 260, sound: 'volcano', vfx: 'vfx_volcano', kind: 'damage', description: 'Stone Head: massive all-tribe clash surge.' },
+  { id: 'bloodlust', name: 'Bloodlust', manaCost: 0, cooldownSec: 22, isStoneHead: true, unlockPlanet: 2, radius: 130, sound: 'attack', vfx: 'vfx_fireball', kind: 'buff', description: 'Free Stone Head ability (0 Mana): doubles all follower attack speed for 12s.' },
+  { id: 'teleport', name: 'Teleport', manaCost: 0, cooldownSec: 18, isStoneHead: true, unlockPlanet: 4, radius: 48, sound: 'shaman_return', vfx: 'vfx_angel', kind: 'teleport', description: 'Free Stone Head ability (0 Mana): blinks your Shaman instantly to the tap point.' },
+  { id: 'ghost_army', name: 'Ghost Army', manaCost: 0, cooldownSec: 26, isStoneHead: true, unlockPlanet: 6, radius: 110, sound: 'swarm', vfx: 'vfx_convert', kind: 'summon', description: 'Free Stone Head ability (0 Mana): summons phantom decoys that absorb enemy hits.' },
+  { id: 'armageddon', name: 'Armageddon', manaCost: 0, cooldownSec: 45, isStoneHead: true, unlockPlanet: 11, radius: 260, sound: 'volcano', vfx: 'vfx_volcano', kind: 'damage', description: 'Free Stone Head ability (0 Mana): unleashes a massive all-tribe battle surge.' },
 ];
 
 export const META_UPGRADES: MetaUpgradeConfig[] = [

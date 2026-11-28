@@ -211,6 +211,29 @@ html, body, #app, #game-container {
 }
 
 /* Bottom-right / bottom-center sleek spell tablet dock */
+/* Active spell clarity strip right above the spell dock */
+.spell-info {
+  position: fixed;
+  left: calc(var(--safe-l) + 120px);
+  bottom: calc(var(--safe-b) + 46px);
+  max-width: calc(100vw - var(--safe-l) - var(--safe-r) - 130px);
+  padding: 3px 9px;
+  border-radius: 5px;
+  font-size: 11.5px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  z-index: 12;
+}
+
+.spell-info strong {
+  font-family: var(--font-display);
+  font-size: 10.5px;
+  color: var(--ink);
+}
+
 /* Compact no-scroll wrapping Spell Palette (all spells visible without horizontal scrolling!) */
 .spell-dock {
   position: fixed;

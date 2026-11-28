@@ -271,6 +271,17 @@ export function isSpellUnlocked(state: GameState, spell: SpellConfig): boolean {
   return true;
 }
 
+/** Automatically queues training buildings & guardhouses as soon as follower & Pantheon requirements are met. */
+export function autoOrderUnlockedBuildings(state: GameState, planetId = state.activePlanetId): Exclude<BuildingBlueprintKind, 'hut'> | null {
+  const order: Exclude<BuildingBlueprintKind, 'hut'>[] = ['warrior_hut', 'temple', 'firewarrior_hut', 'guard_tower'];
+  for (const kind of order) {
+    if (orderBuilding(state, planetId, kind)) {
+      return kind;
+    }
+  }
+  return null;
+}
+
 /** Order a training building or guardhouse based on follower count + Pantheon unlocks (no Mana mismatch!). */
 export function orderBuilding(
   state: GameState,

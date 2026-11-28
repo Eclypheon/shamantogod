@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { META_UPGRADES } from './data';
 import {
   applyOfflineProgress,
+  autoOrderUnlockedBuildings,
   buyMetaUpgrade,
   castSpell,
   claimObeliskMana,
@@ -173,6 +174,28 @@ describe('Shaman to God simulation', () => {
     expect(isTribeAllied(state, 5, 'yellow')).toBe(false);
     expect(formAlliance(state, 5)).toBe(true);
     expect(isTribeAllied(state, 5, 'yellow')).toBe(true);
+  });
+
+  it('automatically orders unlocked training buildings and guardhouses upon meeting requirements', () => {
+    const state = createInitialState();
+    for (let i = 0; i < 4; i++) onWildmanConverted(state);
+    onBuildingConstructed(state, 'hut');
+
+    const ordered1 = autoOrderUnlockedBuildings(state, 1);
+    expect(ordered1).toBe('warrior_hut');
+    expect(state.planets[1].warriorHutOrdered).toBe(true);
+
+    onBuildingConstructed(state, 'warrior_hut');
+    state.metaLevels.unlockTemple = 1;
+    state.metaLevels.unlockFireWarriors = 1;
+    state.metaLevels.unlockGuardhouse = 1;
+    for (let i = 0; i < 12; i++) onWildmanConverted(state); // 16 total followers
+
+    expect(autoOrderUnlockedBuildings(state, 1)).toBe('temple');
+    onBuildingConstructed(state, 'temple');
+    expect(autoOrderUnlockedBuildings(state, 1)).toBe('firewarrior_hut');
+    onBuildingConstructed(state, 'firewarrior_hut');
+    expect(autoOrderUnlockedBuildings(state, 1)).toBe('guard_tower');
   });
 
   it('safely hydrates partial or older saved states without missing planets', () => {
