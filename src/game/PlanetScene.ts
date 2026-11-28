@@ -3,6 +3,7 @@ import { SPELLS } from './data';
 import {
   applyCombatResult,
   castSpell,
+  claimObeliskMana,
   getCastRangePx,
   getMaxHutsForPop,
   getPlanetConfig,
@@ -15,6 +16,7 @@ import {
   getTowerRangePx,
   getTreeRegrowSec,
   getWarriorPowerMult,
+  isTribeAllied,
   onBraveBred,
   onBraveTrained,
   onBuildingConstructed,
@@ -22,9 +24,19 @@ import {
   onPlayerUnitDied,
   onShamanDied,
   onWildmanConverted,
+  syncPlanetHostiles,
   type BuildingBlueprintKind,
   type GameState,
 } from './state';
+import {
+  createHazardVfx,
+  playEarthquakeVfx,
+  playFirestormVfx,
+  playHypnotiseVfx,
+  playLightningVfx,
+  playTeleportVfx,
+  type ActiveHazard,
+} from './spellVfx';
 
 const WORLD_W = 1600;
 const WORLD_H = 1000;
@@ -55,6 +67,14 @@ interface TrainingBuildingNode {
   trainTimer: number;
   barBg: Phaser.GameObjects.Rectangle;
   barFill: Phaser.GameObjects.Rectangle;
+}
+
+interface ObeliskNode {
+  x: number;
+  y: number;
+  sprite: Phaser.GameObjects.Sprite;
+  aura: Phaser.GameObjects.Arc;
+  cooldown: number;
 }
 
 interface TreeNode {
@@ -247,6 +267,9 @@ export class PlanetScene extends Phaser.Scene {
 
   private terrainGfx!: Phaser.GameObjects.Graphics;
   private trees: TreeNode[] = [];
+  private obelisks: ObeliskNode[] = [];
+  private hazards: ActiveHazard[] = [];
+  private shamanBuffAura!: Phaser.GameObjects.Arc;
   private playerHuts: PlayerHutNode[] = [];
   private towers: { x: number; y: number; sprite: Phaser.GameObjects.Sprite }[] = [];
   private trainingBuildings: TrainingBuildingNode[] = [];
@@ -351,6 +374,7 @@ export class PlanetScene extends Phaser.Scene {
 
     this.rangeCircle = this.add.circle(this.shaman.x, this.shaman.y, 185, 0x4ea8de, 0.06);
     this.rangeCircle.setStrokeStyle(1.5, 0xc89b4b, 0.55).setDepth(5);
+    this.shamanBuffAura = this.add.circle(this.shaman.x, this.shaman.y - 16, 26, 0x72efdd, 0.16).setStrokeStyle(2, 0x72efdd, 0.85).setVisible(false).setDepth(501);
 
     this.cameras.main.setBounds(0, 0, WORLD_W, WORLD_H);
     this.cameras.main.startFollow(this.shaman, true, 0.14, 0.14);
@@ -402,6 +426,13 @@ export class PlanetScene extends Phaser.Scene {
   private clearPlanetObjects(): void {
     for (const t of this.trees) t.sprite.destroy();
     this.trees = [];
+    for (const ob of this.obelisks) {
+      ob.sprite.destroy();
+      ob.aura.destroy();
+    }
+    this.obelisks = [];
+    for (const hz of this.hazards) hz.container.destroy();
+    this.hazards = [];
     for (const h of this.playerHuts) {
       h.sprite.destroy();
       h.hpBg.destroy();
@@ -518,6 +549,16 @@ export class PlanetScene extends Phaser.Scene {
       const ty = WORLD_H / 2 + oy;
       const sp = this.add.sprite(tx, ty, 'world', 'tree_full').setOrigin(0.5, 0.92).setDepth(ty);
       this.trees.push({ x: tx, y: ty, sprite: sp, chopped: false, regrowTimer: 0 });
+    }
+
+    // 3 Ancient Mana Obelisks around the map (walk Shaman nearby for burst Mana!)
+    const obeliskOffsets = [[-245, -150], [235, -145], [0, 210]];
+    for (const [ox, oy] of obeliskOffsets) {
+      const x = WORLD_W / 2 + ox;
+      const y = WORLD_H / 2 + oy;
+      const aura = this.add.circle(x, y - 6, 30, 0x72efdd, 0.14).setStrokeStyle(1.8, 0x72efdd, 0.8).setDepth(6);
+      const sp = this.add.sprite(x, y, 'world', 'obelisk').setOrigin(0.5, 0.9).setDepth(y);
+      this.obelisks.push({ x, y, sprite: sp, aura, cooldown: 0 });
     }
 
     this.syncBuiltStructures();
@@ -949,6 +990,7 @@ export class PlanetScene extends Phaser.Scene {
   }
 
   private detonateBlast(bx: number, by: number): void {
+    this.cameras.main.shake(90, 0.0045);
     const radius = 92 * (1 + this.state.metaLevels.tempestForce * 0.15);
     const shock = this.add.circle(bx, by, 14, 0xff9f1c, 0.35).setStrokeStyle(3, 0xfff3b0, 0.95).setDepth(910);
     this.tweens.add({ targets: shock, radius, alpha: 0, duration: 340, onComplete: () => shock.destroy() });
@@ -957,7 +999,7 @@ export class PlanetScene extends Phaser.Scene {
     const powerMult = getSpellPowerMult(this.state);
     // AoE falloff: max damage = 35 (Brave HP) at dead center; Warriors (110 HP) survive direct Blast!
     for (const e of this.enemies) {
-      if (e.dead) continue;
+      if (e.dead || isTribeAllied(this.state, this.state.activePlanetId, e.tribe)) continue;
       const dist = Phaser.Math.Distance.Between(bx, by, e.x, e.y);
       if (dist <= radius) {
         const falloff = Math.max(0.2, 1 - dist / radius);
@@ -972,11 +1014,8 @@ export class PlanetScene extends Phaser.Scene {
     }
 
     // Spells also hurt hostile Rival Shamans!
-    const p = this.state.planets[this.state.activePlanetId];
-    const cfg = getPlanetConfig(p.planetId);
     for (const rs of this.rivalShamans) {
-      if (rs.respawnTimer > 0) continue;
-      if (p.allied && cfg.allianceTribe === rs.tribe) continue;
+      if (rs.respawnTimer > 0 || isTribeAllied(this.state, this.state.activePlanetId, rs.tribe)) continue;
       const dist = Phaser.Math.Distance.Between(bx, by, rs.x, rs.y);
       if (dist <= radius) {
         const falloff = Math.max(0.25, 1 - dist / radius);
@@ -990,6 +1029,7 @@ export class PlanetScene extends Phaser.Scene {
     const siegeMult = 1 + this.state.metaLevels.cataclysmMastery * 0.25;
     for (let i = this.enemyHuts.length - 1; i >= 0; i--) {
       const eh = this.enemyHuts[i];
+      if (isTribeAllied(this.state, this.state.activePlanetId, eh.tribe)) continue;
       if (Phaser.Math.Distance.Between(bx, by, eh.x, eh.y) <= radius) {
         eh.hp -= 24 * powerMult * siegeMult;
         this.updateEnemyHutBar(eh);
@@ -1003,6 +1043,7 @@ export class PlanetScene extends Phaser.Scene {
 
     if (hutHits > 0) applyCombatResult(this.state, 0, hutHits, 0);
     if (launched > 0) this.spawnFloatingText(bx, by, `Blast!`, '#ff9f1c');
+    this.syncHostileCounts();
     this.onHudSync();
   }
 
@@ -1094,29 +1135,124 @@ export class PlanetScene extends Phaser.Scene {
     } else if (spell.id === 'blast') {
       this.fireProjectile(this.shaman.x, this.shaman.y - 26, wx, wy, 'vfx_blast', () => this.detonateBlast(wx, wy));
     } else if (spell.kind === 'teleport') {
-      this.shaman.setPosition(Phaser.Math.Clamp(wx, 120, WORLD_W - 120), Phaser.Math.Clamp(wy, 120, WORLD_H - 120));
-      this.spawnFloatingText(wx, wy, 'Teleport', '#90e0ef');
-    } else {
-      const vfx = this.add.sprite(wx, wy, 'world', spell.vfx).setScale(0.6).setDepth(900);
-      this.tweens.add({ targets: vfx, scale: 2.2, alpha: 0, duration: 550, onComplete: () => vfx.destroy() });
-      // Damage spells also hurt hostile Rival Shamans inside spell radius
-      if (spell.kind === 'damage' || spell.kind === 'terrain' || spell.kind === 'summon') {
-        const p = this.state.planets[this.state.activePlanetId];
-        const cfg = getPlanetConfig(p.planetId);
-        const dmg = Math.round((spell.manaCost >= 300 ? 95 : 48) * getSpellPowerMult(this.state));
-        for (const rs of this.rivalShamans) {
-          if (rs.respawnTimer > 0 || (p.allied && cfg.allianceTribe === rs.tribe)) continue;
-          if (Phaser.Math.Distance.Between(wx, wy, rs.x, rs.y) <= spell.radius) {
-            this.damageRivalShaman(rs, dmg);
+      const oldX = this.shaman.x;
+      const oldY = this.shaman.y;
+      const nx = Phaser.Math.Clamp(wx, 120, WORLD_W - 120);
+      const ny = Phaser.Math.Clamp(wy, 120, WORLD_H - 120);
+      this.shaman.setPosition(nx, ny);
+      playTeleportVfx(this, oldX, oldY, nx, ny);
+      this.spawnFloatingText(nx, ny, 'Teleport', '#90e0ef');
+    } else if (spell.id === 'lightning') {
+      playLightningVfx(this, wx, wy);
+      this.applyAreaSpellDamage(wx, wy, spell.radius, 85, 65);
+    } else if (spell.id === 'swarm' || spell.id === 'swamp' || spell.id === 'tornado' || spell.id === 'volcano') {
+      this.hazards.push(createHazardVfx(this, spell.id, wx, wy, spell.radius));
+      this.spawnFloatingText(wx, wy, spell.name, '#f4c95d');
+    } else if (spell.id === 'firestorm') {
+      playFirestormVfx(this, wx, wy, spell.radius);
+      this.applyAreaSpellDamage(wx, wy, spell.radius, 95, 80);
+    } else if (spell.id === 'earthquake' || spell.id === 'erode') {
+      playEarthquakeVfx(this, wx, wy, spell.radius);
+      this.applyAreaSpellDamage(wx, wy, spell.radius, 50, 110);
+    } else if (spell.id === 'hypnotise') {
+      playHypnotiseVfx(this, wx, wy, spell.radius);
+      let conv = 0;
+      for (const e of this.enemies) {
+        if (e.dead || isTribeAllied(this.state, this.state.activePlanetId, e.tribe)) continue;
+        if (Phaser.Math.Distance.Between(wx, wy, e.x, e.y) <= spell.radius) {
+          const ex = e.x;
+          const ey = e.y;
+          this.killEnemy(e);
+          if (onWildmanConverted(this.state)) {
+            this.spawnBrave(ex, ey);
+            conv++;
           }
         }
       }
-      if (res.converted && res.converted > 0) this.spawnFloatingText(wx, wy, `+${res.converted} Followers`, '#74c69d');
-      else if (res.destroyed && res.destroyed > 0) this.spawnFloatingText(wx, wy, `-${res.destroyed} Enemy Hut`, '#ffb703');
-      else if (spell.kind === 'buff') this.spawnFloatingText(wx, wy, `${spell.name} Active`, '#90e0ef');
+      this.spawnFloatingText(wx, wy, conv > 0 ? `Hypnotised +${conv}!` : 'Hypnotise', '#e0aaff');
+    } else if (spell.id === 'angel') {
+      // Spectral hunter strikes up to 5 enemies across the map
+      const targets = this.enemies.filter((e) => !e.dead && !isTribeAllied(this.state, this.state.activePlanetId, e.tribe)).slice(0, 5);
+      targets.forEach((t, idx) => {
+        this.time.delayedCall(idx * 240, () => {
+          if (!t.dead) {
+            playLightningVfx(this, t.x, t.y);
+            t.hp -= 120 * getSpellPowerMult(this.state);
+            if (t.hp <= 0) this.killEnemy(t);
+          }
+        });
+      });
+      this.spawnFloatingText(wx, wy, 'Angel of Death!', '#f4c95d');
+    } else if (spell.id === 'armageddon') {
+      this.cameras.main.shake(420, 0.014);
+      const targets = this.enemies.filter((e) => !e.dead && !isTribeAllied(this.state, this.state.activePlanetId, e.tribe)).slice(0, 8);
+      targets.forEach((t, idx) => {
+        this.time.delayedCall(idx * 150, () => {
+          if (!t.dead) {
+            playLightningVfx(this, t.x, t.y);
+            t.hp -= 140;
+            if (t.hp <= 0) this.killEnemy(t);
+          }
+        });
+      });
+      this.spawnFloatingText(wx, wy, 'ARMAGEDDON!', '#e63946');
+    } else {
+      const ring = this.add.circle(wx, wy, 18, 0x90e0ef, 0.2).setStrokeStyle(2.5, 0x90e0ef, 0.9).setDepth(900);
+      this.tweens.add({ targets: ring, radius: spell.radius, alpha: 0, duration: 500, onComplete: () => ring.destroy() });
+      if (spell.kind === 'buff') this.spawnFloatingText(wx, wy, `${spell.name} Active`, '#90e0ef');
+      else this.spawnFloatingText(wx, wy, spell.name, '#f4e6c4');
     }
 
+    this.syncHostileCounts();
     this.onHudSync();
+  }
+
+  private applyAreaSpellDamage(wx: number, wy: number, radius: number, unitDmg: number, hutDmg: number): void {
+    const mult = getSpellPowerMult(this.state);
+    const siegeMult = 1 + this.state.metaLevels.cataclysmMastery * 0.25;
+    for (const e of this.enemies) {
+      if (e.dead || isTribeAllied(this.state, this.state.activePlanetId, e.tribe)) continue;
+      if (Phaser.Math.Distance.Between(wx, wy, e.x, e.y) <= radius) {
+        e.hp -= Math.round(unitDmg * mult);
+        if (e.hp <= 0) this.killEnemy(e);
+      }
+    }
+    for (const rs of this.rivalShamans) {
+      if (rs.respawnTimer > 0 || isTribeAllied(this.state, this.state.activePlanetId, rs.tribe)) continue;
+      if (Phaser.Math.Distance.Between(wx, wy, rs.x, rs.y) <= radius) {
+        this.damageRivalShaman(rs, Math.round(unitDmg * mult));
+      }
+    }
+    let hutsDown = 0;
+    for (let i = this.enemyHuts.length - 1; i >= 0; i--) {
+      const eh = this.enemyHuts[i];
+      if (isTribeAllied(this.state, this.state.activePlanetId, eh.tribe)) continue;
+      if (Phaser.Math.Distance.Between(wx, wy, eh.x, eh.y) <= radius) {
+        eh.hp -= Math.round(hutDmg * mult * siegeMult);
+        this.updateEnemyHutBar(eh);
+        if (eh.hp <= 0) {
+          this.destroyEnemyHut(eh, i);
+          hutsDown++;
+          this.spawnFloatingText(eh.x, eh.y, '-1 Enemy Hut', '#ffb703');
+        }
+      }
+    }
+    if (hutsDown > 0) applyCombatResult(this.state, 0, hutsDown, 0);
+  }
+
+  private syncHostileCounts(): void {
+    const pid = this.state.activePlanetId;
+    const hostileUnits =
+      this.enemies.filter((e) => !e.dead && !isTribeAllied(this.state, pid, e.tribe)).length +
+      this.rivalShamans.filter((rs) => rs.respawnTimer <= 0 && !isTribeAllied(this.state, pid, rs.tribe)).length;
+    const hostileHuts = this.enemyHuts.filter((eh) => eh.hp > 0 && !isTribeAllied(this.state, pid, eh.tribe)).length;
+    const justConquered = syncPlanetHostiles(this.state, hostileUnits, hostileHuts);
+    if (justConquered) {
+      this.playSfx('shaman_return', 0.5);
+      this.cameras.main.flash(450, 244, 201, 93, false);
+      this.onToast(`Planet ${pid} Conquered (100%)! Tap Ascend to continue!`);
+      this.onHudSync();
+    }
   }
 
   private playBraveAnim(b: BraveActor, verb: 'run' | 'work' | 'punch' | 'pray'): void {
@@ -1688,8 +1824,11 @@ export class PlanetScene extends Phaser.Scene {
             const rk = `warrior_blue_run_d${s.dir}`;
             if (this.anims.exists(rk) && s.sprite.anims.currentAnim?.key !== rk) s.sprite.play(rk);
           } else {
-            if (this.anims.exists('warrior_blue_idle') && s.sprite.anims.currentAnim?.key !== 'warrior_blue_idle') {
-              s.sprite.play('warrior_blue_idle');
+            // Clean 8-dir upright standing idle frame (warflinch frame 0)
+            const standFrame = `warrior_blue_stand_d${s.dir}_00`;
+            if (this.textures.get('units').has(standFrame)) {
+              s.sprite.anims.stop();
+              s.sprite.setFrame(standFrame);
             }
             if (Math.random() < 0.25 * dt) {
               s.patrolX = WORLD_W / 2 + Phaser.Math.Between(-130, 130);
@@ -1736,6 +1875,7 @@ export class PlanetScene extends Phaser.Scene {
           const tx = enemy ? enemy.x : rivalShaman!.x;
           const ty = enemy ? enemy.y : rivalShaman!.y;
           s.sprite.setFlipX(tx < s.x);
+          if (this.anims.exists('firewarrior_blue_fire')) s.sprite.play('firewarrior_blue_fire', true);
           this.playSfx('fire', 0.22);
           this.fireProjectile(s.x, s.y - 18, tx, ty - 12, 'vfx_fireball', () => {
             if (enemy && !enemy.dead) {
@@ -1745,16 +1885,22 @@ export class PlanetScene extends Phaser.Scene {
               this.damageRivalShaman(rivalShaman, fireDmg);
             }
           });
-        } else if (s.garrisonedTowerIdx < 0) {
-          const farEnemy = this.findNearestEnemy(s.x, s.y, 900);
-          if (farEnemy) {
-            const d = Phaser.Math.Distance.Between(s.x, s.y, farEnemy.x, farEnemy.y);
-            if (d > 175) {
-              const dx = (farEnemy.x - s.x) / d;
-              const dy = (farEnemy.y - s.y) / d;
-              s.x += dx * 40 * dt;
-              s.y += dy * 40 * dt;
-              s.sprite.setFlipX(dx < 0);
+        } else {
+          if (s.attackTimer <= 1.2 && s.sprite.anims.isPlaying) {
+            s.sprite.anims.stop();
+            s.sprite.setFrame('firewarrior_blue_fire_00');
+          }
+          if (s.garrisonedTowerIdx < 0) {
+            const farEnemy = this.findNearestEnemy(s.x, s.y, 900);
+            if (farEnemy) {
+              const d = Phaser.Math.Distance.Between(s.x, s.y, farEnemy.x, farEnemy.y);
+              if (d > 175) {
+                const dx = (farEnemy.x - s.x) / d;
+                const dy = (farEnemy.y - s.y) / d;
+                s.x += dx * 40 * dt;
+                s.y += dy * 40 * dt;
+                s.sprite.setFlipX(dx < 0);
+              }
             }
           }
         }
@@ -1800,20 +1946,26 @@ export class PlanetScene extends Phaser.Scene {
       }
     }
 
-    // Periodic enemy raids once the player has built at least 1 Hut (longer initial grace period on World 1!)
-    if (p.hutsBuilt >= 1 && this.enemyHuts.length > 0) {
-      this.enemyRaidTimer -= dt;
-      if (this.enemyRaidTimer <= 0) {
-        this.enemyRaidTimer = cfg.id === 1 ? 26 : Math.max(8, 18 - cfg.id * 0.6);
-        const aliveEnemies = this.enemies.filter((e) => !e.dead && !e.insideTraining);
-        if (aliveEnemies.length < (cfg.id === 1 ? 4 : 7)) {
-          const eh = this.enemyHuts[Phaser.Math.Between(0, this.enemyHuts.length - 1)];
-          this.spawnEnemy(eh.tribe, eh.x, eh.y + 18);
-        }
-        const raiders = aliveEnemies.filter((e) => e.role === 'warrior').slice(0, cfg.id === 1 ? 1 : 2);
-        for (const e of raiders) {
-          e.targetX = WORLD_W / 2 + Phaser.Math.Between(-90, 90);
-          e.targetY = WORLD_H / 2 + Phaser.Math.Between(-70, 70);
+    // Periodic enemy raids & reinforcements once player has built at least 1 Hut
+    if (p.hutsBuilt >= 1) {
+      const hostileHuts = this.enemyHuts.filter((h) => h.hp > 0 && !isTribeAllied(this.state, p.planetId, h.tribe));
+      if (hostileHuts.length > 0) {
+        this.enemyRaidTimer -= dt;
+        if (this.enemyRaidTimer <= 0) {
+          this.enemyRaidTimer = cfg.id === 1 ? 22 : Math.max(9, 18 - cfg.id * 0.6);
+          const aliveHostile = this.enemies.filter((e) => !e.dead && !e.insideTraining && !isTribeAllied(this.state, p.planetId, e.tribe));
+          const maxHostile = cfg.id === 1 ? 5 : Math.min(10, 5 + Math.floor(cfg.id / 2));
+          if (aliveHostile.length < maxHostile) {
+            const eh = hostileHuts[Phaser.Math.Between(0, hostileHuts.length - 1)];
+            this.spawnEnemy(eh.tribe, eh.x, eh.y + 18, 'brave', eh.x, eh.y + 18);
+          }
+          const raiders = aliveHostile.filter((e) => e.role === 'warrior').slice(0, cfg.id === 1 ? 2 : 3);
+          if (raiders.length > 0) {
+            for (const e of raiders) {
+              e.targetX = WORLD_W / 2 + Phaser.Math.Between(-95, 95);
+              e.targetY = WORLD_H / 2 + Phaser.Math.Between(-70, 70);
+            }
+          }
         }
       }
     }
@@ -1873,13 +2025,71 @@ export class PlanetScene extends Phaser.Scene {
             if (this.anims.exists(pk) && e.sprite.anims.currentAnim?.key !== pk) e.sprite.play(pk);
           }
         }
+      } else if (isTribeAllied(this.state, this.state.activePlanetId, e.tribe)) {
+        // Allied Warriors actively march toward hostile rival enemies/huts and fight alongside you!
+        e.attackTimer = Math.max(0, e.attackTimer - dt);
+        const foe = this.findNearestEnemy(e.x, e.y, 650);
+        const foeHut = !foe ? this.findNearestEnemyHut(e.x, e.y, 900) : null;
+        if (foe) {
+          const d = Phaser.Math.Distance.Between(e.x, e.y, foe.x, foe.y);
+          if (d <= 28) {
+            e.dir = dir4FromVec(foe.x - e.x, foe.y - e.y);
+            const pk = `warrior_${e.tribe}_punch_d${e.dir}`;
+            if (this.anims.exists(pk) && e.sprite.anims.currentAnim?.key !== pk) e.sprite.play(pk);
+            if (e.attackTimer <= 0) {
+              e.attackTimer = 1.05;
+              foe.hp -= 12;
+              if (foe.hp <= 0) this.killEnemy(foe);
+            }
+          } else {
+            const dx = (foe.x - e.x) / d;
+            const dy = (foe.y - e.y) / d;
+            e.x += dx * 44 * dt;
+            e.y += dy * 44 * dt;
+            e.dir = dir4FromVec(dx, dy);
+            const rk = `warrior_${e.tribe}_run_d${e.dir}`;
+            if (this.anims.exists(rk) && e.sprite.anims.currentAnim?.key !== rk) e.sprite.play(rk);
+          }
+        } else if (foeHut) {
+          const d = Phaser.Math.Distance.Between(e.x, e.y, foeHut.x, foeHut.y);
+          if (d <= 40) {
+            e.dir = dir4FromVec(foeHut.x - e.x, foeHut.y - e.y);
+            const pk = `warrior_${e.tribe}_punch_d${e.dir}`;
+            if (this.anims.exists(pk) && e.sprite.anims.currentAnim?.key !== pk) e.sprite.play(pk);
+            if (e.attackTimer <= 0) {
+              e.attackTimer = 1.1;
+              foeHut.hp -= 12;
+              this.updateEnemyHutBar(foeHut);
+              if (foeHut.hp <= 0) {
+                const idx = this.enemyHuts.indexOf(foeHut);
+                if (idx >= 0) this.destroyEnemyHut(foeHut, idx);
+                applyCombatResult(this.state, 0, 1, 0);
+                this.syncHostileCounts();
+              }
+            }
+          } else {
+            const dx = (foeHut.x - e.x) / d;
+            const dy = (foeHut.y - e.y) / d;
+            e.x += dx * 42 * dt;
+            e.y += dy * 42 * dt;
+            e.dir = dir4FromVec(dx, dy);
+            const rk = `warrior_${e.tribe}_run_d${e.dir}`;
+            if (this.anims.exists(rk) && e.sprite.anims.currentAnim?.key !== rk) e.sprite.play(rk);
+          }
+        } else {
+          const sf = `warrior_${e.tribe}_stand_d${e.dir}_00`;
+          if (this.textures.get('units').has(sf)) {
+            e.sprite.anims.stop();
+            e.sprite.setFrame(sf);
+          }
+        }
       } else {
         e.attackTimer = Math.max(0, e.attackTimer - dt);
         const nearShaman =
           this.shamanRespawnTimer <= 0 &&
           Phaser.Math.Distance.Between(e.x, e.y, this.shaman.x, this.shaman.y) <= 32;
         const nearWarrior = this.specialists.find((s) => s.garrisonedTowerIdx < 0 && Phaser.Math.Distance.Between(e.x, e.y, s.x, s.y) <= 28);
-        const nearBrave = this.braves.find((b) => b.fsm !== 'breeding' && Phaser.Math.Distance.Between(e.x, e.y, b.x, b.y) <= 26);
+        const nearBrave = this.braves.find((b) => b.fsm !== 'breeding' && b.fsm !== 'training' && Phaser.Math.Distance.Between(e.x, e.y, b.x, b.y) <= 26);
         const nearHut = this.playerHuts.find((h) => h.hp > 0 && Phaser.Math.Distance.Between(e.x, e.y, h.x, h.y) <= 38);
 
         if (nearShaman || nearWarrior || nearBrave || nearHut) {
@@ -1964,7 +2174,46 @@ export class PlanetScene extends Phaser.Scene {
         ? this.braves.find((b) => b.fsm !== 'breeding' && Phaser.Math.Distance.Between(rs.x, rs.y, b.x, b.y) <= 40)
         : undefined;
 
-      if (nearPlayerShaman || nearSpec || nearBrave) {
+      if (isAlly) {
+        // Ally Shaman actively marches and casts Lightning at hostile rivals!
+        const foe = this.findNearestEnemy(rs.x, rs.y, 450);
+        const foeHut = !foe ? this.findNearestEnemyHut(rs.x, rs.y, 700) : null;
+        if (foe && Phaser.Math.Distance.Between(rs.x, rs.y, foe.x, foe.y) <= 180) {
+          rs.dir = dir8FromVec(foe.x - rs.x, foe.y - rs.y);
+          if (rs.attackTimer <= 0) {
+            rs.attackTimer = 4.2;
+            const ck = `shaman_${rs.tribe}_cast_d${rs.dir}`;
+            if (this.anims.exists(ck)) rs.sprite.play(ck);
+            playLightningVfx(this, foe.x, foe.y);
+            foe.hp -= 45;
+            if (foe.hp <= 0) this.killEnemy(foe);
+          }
+        } else if (foe || foeHut) {
+          const tx = foe ? foe.x : foeHut!.x;
+          const ty = foe ? foe.y : foeHut!.y;
+          const d = Phaser.Math.Distance.Between(rs.x, rs.y, tx, ty);
+          if (d > 140) {
+            const dx = (tx - rs.x) / d;
+            const dy = (ty - rs.y) / d;
+            rs.x += dx * 48 * dt;
+            rs.y += dy * 48 * dt;
+            rs.dir = dir8FromVec(dx, dy);
+            const wk = `shaman_${rs.tribe}_walk_d${rs.dir}`;
+            if (this.anims.exists(wk) && rs.sprite.anims.currentAnim?.key !== wk) rs.sprite.play(wk);
+          } else if (foeHut && rs.attackTimer <= 0) {
+            rs.attackTimer = 4.5;
+            playLightningVfx(this, foeHut.x, foeHut.y);
+            foeHut.hp -= 35;
+            this.updateEnemyHutBar(foeHut);
+            if (foeHut.hp <= 0) {
+              const idx = this.enemyHuts.indexOf(foeHut);
+              if (idx >= 0) this.destroyEnemyHut(foeHut, idx);
+              applyCombatResult(this.state, 0, 1, 0);
+              this.syncHostileCounts();
+            }
+          }
+        }
+      } else if (nearPlayerShaman || nearSpec || nearBrave) {
         const tx = nearPlayerShaman ? this.shaman.x : nearSpec ? nearSpec.x : nearBrave!.x;
         const ty = nearPlayerShaman ? this.shaman.y : nearSpec ? nearSpec.y : nearBrave!.y;
         rs.dir = dir8FromVec(tx - rs.x, ty - rs.y);
@@ -1986,6 +2235,26 @@ export class PlanetScene extends Phaser.Scene {
           }
         }
       } else {
+        // Hostile Rival Shaman casts ranged Enemy Bolt at player units within 190px!
+        const rangedTarget =
+          !isAlly && rs.attackTimer <= 0 && this.shamanRespawnTimer <= 0 && Phaser.Math.Distance.Between(rs.x, rs.y, this.shaman.x, this.shaman.y) <= 195
+            ? { x: this.shaman.x, y: this.shaman.y, hit: () => this.damagePlayerShaman(16) }
+            : !isAlly && rs.attackTimer <= 0
+              ? (() => {
+                  const sp = this.specialists.find((s) => s.garrisonedTowerIdx < 0 && Phaser.Math.Distance.Between(rs.x, rs.y, s.x, s.y) <= 190);
+                  return sp ? { x: sp.x, y: sp.y, hit: () => { sp.hp -= 16; if (sp.hp <= 0) this.killPlayerSpecialist(sp); } } : null;
+                })()
+              : null;
+
+        if (rangedTarget) {
+          rs.attackTimer = 6.5;
+          rs.dir = dir8FromVec(rangedTarget.x - rs.x, rangedTarget.y - rs.y);
+          const ck = `shaman_${rs.tribe}_cast_d${rs.dir}`;
+          if (this.anims.exists(ck)) rs.sprite.play(ck);
+          this.playSfx('blast', 0.2);
+          this.fireProjectile(rs.x, rs.y - 24, rangedTarget.x, rangedTarget.y - 12, 'vfx_fireball', rangedTarget.hit);
+        }
+
         const dist = Phaser.Math.Distance.Between(rs.x, rs.y, rs.targetX, rs.targetY);
         if (dist < 6) {
           rs.waitTimer -= dt;
@@ -2086,10 +2355,11 @@ export class PlanetScene extends Phaser.Scene {
   }
 
   private findNearestEnemyHut(x: number, y: number, maxDist: number): EnemyHutNode | null {
+    const pid = this.state.activePlanetId;
     let best: EnemyHutNode | null = null;
     let bestD = maxDist;
     for (const eh of this.enemyHuts) {
-      if (eh.hp <= 0) continue;
+      if (eh.hp <= 0 || isTribeAllied(this.state, pid, eh.tribe)) continue;
       const d = Phaser.Math.Distance.Between(x, y, eh.x, eh.y);
       if (d < bestD) {
         bestD = d;
@@ -2100,10 +2370,11 @@ export class PlanetScene extends Phaser.Scene {
   }
 
   private findNearestEnemy(x: number, y: number, maxDist: number): EnemyActor | null {
+    const pid = this.state.activePlanetId;
     let best: EnemyActor | null = null;
     let bestD = maxDist;
     for (const e of this.enemies) {
-      if (e.dead || e.airZ > 0) continue;
+      if (e.dead || e.airZ > 0 || e.insideTraining || isTribeAllied(this.state, pid, e.tribe)) continue;
       const d = Phaser.Math.Distance.Between(x, y, e.x, e.y);
       if (d < bestD) {
         bestD = d;
@@ -2111,6 +2382,63 @@ export class PlanetScene extends Phaser.Scene {
       }
     }
     return best;
+  }
+
+  private updateHazardsAndObelisks(dt: number): void {
+    // Active spell hazards (Swarm, Swamp, Tornado, Volcano)
+    for (let i = this.hazards.length - 1; i >= 0; i--) {
+      const hz = this.hazards[i];
+      hz.remaining -= dt;
+      hz.phase += dt * 5;
+      hz.tickAccum += dt;
+      hz.x = Phaser.Math.Clamp(hz.x + hz.vx * dt, 140, WORLD_W - 140);
+      hz.y = Phaser.Math.Clamp(hz.y + hz.vy * dt, 140, WORLD_H - 140);
+      hz.container.setPosition(hz.x, hz.y);
+      if (hz.kind === 'swarm' || hz.kind === 'tornado') {
+        hz.container.setRotation(hz.phase * (hz.kind === 'tornado' ? 1.8 : 0.7));
+      }
+      if (hz.tickAccum >= 0.7) {
+        hz.tickAccum = 0;
+        const unitDmg = hz.kind === 'volcano' ? 36 : hz.kind === 'tornado' ? 24 : 18;
+        const hutDmg = hz.kind === 'volcano' ? 30 : hz.kind === 'tornado' ? 18 : 0;
+        this.applyAreaSpellDamage(hz.x, hz.y, hz.radius, unitDmg, hutDmg);
+      }
+      if (hz.remaining <= 0) {
+        hz.container.destroy();
+        this.hazards.splice(i, 1);
+      }
+    }
+
+    // Ancient Mana Obelisks: walk Shaman within 48px to harvest burst Mana
+    for (const ob of this.obelisks) {
+      if (ob.cooldown > 0) {
+        ob.cooldown = Math.max(0, ob.cooldown - dt);
+        ob.aura.setVisible(false);
+        ob.sprite.setAlpha(0.55);
+      } else {
+        ob.aura.setVisible(true).setScale(0.92 + 0.1 * Math.sin(this.time.now * 0.004));
+        ob.sprite.setAlpha(1);
+        if (this.shamanRespawnTimer <= 0 && Phaser.Math.Distance.Between(this.shaman.x, this.shaman.y, ob.x, ob.y) <= 48) {
+          ob.cooldown = 35;
+          const gain = claimObeliskMana(this.state, 45);
+          this.playSfx('convert', 0.35);
+          this.spawnFloatingText(ob.x, ob.y - 26, `+${gain} Mana!`, '#72efdd');
+          this.onHudSync();
+        }
+      }
+    }
+
+    // Shaman active buff aura visual
+    const hasShield = (this.state.activeBuffs.shield ?? 0) > 0;
+    const hasBlood = (this.state.activeBuffs.bloodlust ?? 0) > 0;
+    const hasInvis = (this.state.activeBuffs.invisibility ?? 0) > 0;
+    const showAura = this.shamanRespawnTimer <= 0 && (hasShield || hasBlood || hasInvis);
+    this.shamanBuffAura.setVisible(showAura);
+    if (showAura) {
+      const col = hasShield ? 0x72efdd : hasBlood ? 0xe63946 : 0xc77dff;
+      this.shamanBuffAura.setPosition(this.shaman.x, this.shaman.y - 18).setFillStyle(col, 0.16).setStrokeStyle(2, col, 0.85);
+    }
+    this.shaman.setAlpha(hasInvis ? 0.5 : 1);
   }
 
   update(_time: number, deltaMs: number): void {
@@ -2211,6 +2539,7 @@ export class PlanetScene extends Phaser.Scene {
       this.updateBravesAndHuts(dt);
       this.updateSpecialists(dt);
       this.updateEnemiesAndRivals(dt);
+      this.updateHazardsAndObelisks(dt);
     } catch (err) {
       console.error('PlanetScene step error:', err);
     }
@@ -2219,6 +2548,7 @@ export class PlanetScene extends Phaser.Scene {
     if (this.simAccum >= 0.25) {
       this.simAccum = 0;
       this.syncUnitActors();
+      this.syncHostileCounts();
       this.onHudSync();
     }
   }

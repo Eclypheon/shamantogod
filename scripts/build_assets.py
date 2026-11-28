@@ -133,6 +133,11 @@ def build_unit_atlas(zf: zipfile.ZipFile):
             add_clip(f"RedBrave/BraPray{d}.gif", f"brave_{tribe}_pray_d{d}", tribe)
             add_clip(f"RedWarrior/warrun{d}.gif", f"warrior_{tribe}_run_d{d}", tribe)
             add_clip(f"RedWarrior/warpunch{d}.gif", f"warrior_{tribe}_punch_d{d}", tribe)
+            # Extract upright frame 0 of warflinch as clean 8-dir standing idle pose
+            flinch_member = f"RedWarrior/warflinch{d}.gif"
+            if flinch_member in names:
+                f0 = extract_gif_frames(zf, flinch_member)[0]
+                frames[f"warrior_{tribe}_stand_d{d}_00"] = recolor_cloth(f0, TRIBE_TARGETS[tribe])
         for d in [1, 3, 5, 7]:
             add_clip(f"BlueSpy/SpyRun{d}.gif", f"spy_{tribe}_run_d{d}", tribe, source_blue=True)
 
@@ -378,6 +383,15 @@ def build_world_atlas():
 
     frames["tree_full"] = draw_populous_tree(stump=False)
     frames["tree_stump"] = draw_populous_tree(stump=True)
+
+    # Ancient Mana Obelisk (walkable exploration shrine for burst Mana)
+    ob = Image.new("RGBA", (36, 56), (0, 0, 0, 0))
+    dob = ImageDraw.Draw(ob)
+    dob.ellipse([6, 44, 30, 54], fill=(24, 18, 12, 120))
+    dob.polygon([(18, 4), (11, 16), (10, 48), (26, 48), (25, 16)], fill=(120, 124, 130, 255), outline=(58, 62, 68, 255))
+    dob.polygon([(18, 10), (14, 22), (18, 34), (22, 22)], fill=(90, 225, 255, 240))
+    dob.ellipse([15, 19, 21, 25], fill=(240, 255, 255, 255))
+    frames["obelisk"] = ob
 
     # Stone Head monument
     sh = Image.new("RGBA", (40, 48), (0, 0, 0, 0))

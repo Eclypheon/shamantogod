@@ -4,6 +4,7 @@ import {
   applyOfflineProgress,
   buyMetaUpgrade,
   castSpell,
+  claimObeliskMana,
   computeDominance,
   createInitialState,
   formAlliance,
@@ -13,6 +14,7 @@ import {
   getRoleUnitCap,
   hydrateState,
   isMetaNodeVisible,
+  isTribeAllied,
   onBraveTrained,
   onBuildingConstructed,
   onPlayerUnitDied,
@@ -22,6 +24,7 @@ import {
   prestigeToPlanet,
   stepSimulation,
   switchPlanet,
+  syncPlanetHostiles,
 } from './state';
 
 describe('Shaman to God simulation', () => {
@@ -147,6 +150,29 @@ describe('Shaman to God simulation', () => {
     expect(formAlliance(state, 5)).toBe(true);
     expect(state.planets[5].allied).toBe(true);
     expect(computeDominance(state.planets[5])).toBeGreaterThan(before);
+  });
+
+  it('reaches exactly 100% Dominance and conquers planet when all hostiles are cleared via syncPlanetHostiles', () => {
+    const state = createInitialState();
+    onWildmanConverted(state);
+    const conquered = syncPlanetHostiles(state, 0, 0);
+    expect(conquered).toBe(true);
+    expect(computeDominance(state.planets[1])).toBe(100);
+    expect(state.planets[2].unlocked).toBe(true);
+  });
+
+  it('harvests Obelisk Mana bursts and recognizes Allied tribes', () => {
+    const state = createInitialState();
+    const before = state.mana;
+    const gain = claimObeliskMana(state, 45);
+    expect(gain).toBeGreaterThanOrEqual(45);
+    expect(state.mana).toBe(before + gain);
+
+    state.planets[5].unlocked = true;
+    state.mana = 600;
+    expect(isTribeAllied(state, 5, 'yellow')).toBe(false);
+    expect(formAlliance(state, 5)).toBe(true);
+    expect(isTribeAllied(state, 5, 'yellow')).toBe(true);
   });
 
   it('safely hydrates partial or older saved states without missing planets', () => {

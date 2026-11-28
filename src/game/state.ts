@@ -118,6 +118,8 @@ export function createInitialState(now = Date.now()): GameState {
 }
 
 export function computeDominance(p: PlanetProgress): number {
+  // If every hostile enemy and hut is cleared, Dominance is cleanly 100%!
+  if (p.enemyPop <= 0 && p.enemyHutsRemaining <= 0) return 100;
   const totalPop = Math.max(1, p.loyalPop + p.enemyPop);
   const popShare = Math.min(1, p.loyalPop / totalPop);
   const razed = Math.max(0, p.initialEnemyHuts - p.enemyHutsRemaining);
@@ -125,6 +127,32 @@ export function computeDominance(p: PlanetProgress): number {
   const allianceBonus = p.allied ? 0.1 : 0;
   const raw = (popShare * 0.5 + hutShare * 0.5 + allianceBonus) * 100;
   return Math.min(100, Math.round(raw * 10) / 10);
+}
+
+export function isTribeAllied(state: GameState, planetId: number, tribe: string): boolean {
+  const cfg = getPlanetConfig(planetId);
+  const p = state.planets[planetId];
+  return Boolean(p?.allied && cfg.allianceTribe === tribe);
+}
+
+/** Keeps state.ts enemy counts strictly synchronized with live hostile scene entities so clearing a planet always hits 100%. */
+export function syncPlanetHostiles(state: GameState, hostileUnitsAlive: number, hostileHutsAlive: number): boolean {
+  const p = state.planets[state.activePlanetId];
+  const wasConquered = p.conquered;
+  p.enemyHutsRemaining = Math.min(p.initialEnemyHuts, Math.max(0, hostileHutsAlive));
+  if (hostileHutsAlive <= 0 && hostileUnitsAlive <= 0) {
+    p.enemyPop = 0;
+  } else {
+    p.enemyPop = Math.max(hostileUnitsAlive, Math.min(p.enemyPop, hostileUnitsAlive + hostileHutsAlive * 3));
+  }
+  updateDominanceAndUnlocks(state, p);
+  return !wasConquered && p.conquered;
+}
+
+export function claimObeliskMana(state: GameState, baseAmount = 45): number {
+  const gain = Math.round(baseAmount * (1 + (state.activePlanetId - 1) * 0.35) * (1 + state.metaLevels.manaRate * 0.15));
+  state.mana += gain;
+  return gain;
 }
 
 export function getPlanetConfig(planetId: number): PlanetConfig {
@@ -502,8 +530,10 @@ export function formAlliance(state: GameState, planetId: number): boolean {
   const cfg = getPlanetConfig(planetId);
   const p = state.planets[planetId];
   if (!cfg.allianceTribe || !cfg.allianceCost || p.allied) return false;
-  if (state.mana < cfg.allianceCost) return false;
-  state.mana -= cfg.allianceCost;
+  const discount = Math.max(0.25, 1 - state.metaLevels.allianceFavor * 0.15);
+  const cost = Math.round(cfg.allianceCost * discount);
+  if (state.mana < cost) return false;
+  state.mana -= cost;
   p.allied = true;
   updateDominanceAndUnlocks(state, p);
   return true;

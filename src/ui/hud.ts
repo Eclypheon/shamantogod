@@ -66,6 +66,7 @@ export class HudController {
   private elAscendBtn!: HTMLButtonElement;
   private elTabBtns!: NodeListOf<HTMLButtonElement>;
   private elSpellDock!: HTMLElement;
+  private elDrawerBackdrop!: HTMLElement;
   private elDrawer!: HTMLElement;
   private elToast!: HTMLElement;
   private elInstallBanner!: HTMLElement;
@@ -150,6 +151,7 @@ export class HudController {
       <div class="papyrus toast" id="hud-toast"></div>
       <div class="papyrus install-banner" id="hud-install"></div>
 
+      <div class="drawer-backdrop" id="hud-drawer-backdrop"></div>
       <aside class="papyrus scroll-drawer" id="hud-drawer"></aside>
 
       <div class="joystick-zone" id="hud-joystick">
@@ -182,7 +184,29 @@ export class HudController {
     this.elAscendBtn = this.root.querySelector('#hud-ascend')!;
     this.elTabBtns = this.root.querySelectorAll('[data-tab]');
     this.elSpellDock = this.root.querySelector('#hud-spells')!;
+    this.elDrawerBackdrop = this.root.querySelector('#hud-drawer-backdrop')!;
     this.elDrawer = this.root.querySelector('#hud-drawer')!;
+
+    this.elDrawerBackdrop.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      this.activeTab = 'none';
+      this.syncTabs();
+      this.syncCoach();
+    });
+
+    // Keyboard shortcuts 1-9 for instant spell switching on desktop
+    window.addEventListener('keydown', (e) => {
+      if (this.titleOpen || this.pantheonOpen) return;
+      const idx = Number(e.key) - 1;
+      if (idx >= 0 && idx <= 8) {
+        const unlocked = SPELLS.filter((s) => isSpellUnlocked(this.state, s));
+        if (unlocked[idx]) {
+          this.state.selectedSpellId = unlocked[idx].id;
+          this.syncSpells();
+          this.syncCoach();
+        }
+      }
+    });
     this.elToast = this.root.querySelector('#hud-toast')!;
     this.elInstallBanner = this.root.querySelector('#hud-install')!;
     this.elTitleScreen = this.root.querySelector('#hud-title')!;
@@ -792,7 +816,9 @@ export class HudController {
     this.elTabBtns.forEach((btn) => {
       btn.classList.toggle('active', btn.dataset.tab === this.activeTab);
     });
-    this.elDrawer.classList.toggle('open', this.activeTab !== 'none');
+    const isOpen = this.activeTab !== 'none';
+    this.elDrawer.classList.toggle('open', isOpen);
+    this.elDrawerBackdrop.classList.toggle('open', isOpen);
   }
 
   private syncSpells(): void {
