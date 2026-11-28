@@ -1,10 +1,12 @@
 import Phaser from 'phaser';
-import { SPELLS } from './data';
+import { SPELLS, type SpellConfig } from './data';
 import {
   applyCombatResult,
   autoOrderUnlockedBuildings,
   castSpell,
   claimObeliskMana,
+  findNearestClusterCentroid,
+  formAlliance,
   getCastRangePx,
   getMaxHutsForPop,
   getPlanetConfig,
@@ -17,6 +19,8 @@ import {
   getTowerRangePx,
   getTreeRegrowSec,
   getWarriorPowerMult,
+  isSpellAutoCastUnlocked,
+  isSpellUnlocked,
   isTribeAllied,
   onBraveBred,
   onBraveTrained,
@@ -305,6 +309,7 @@ export class PlanetScene extends Phaser.Scene {
   private renderedAllied = false;
   private enemyRaidTimer = 45;
   private simAccum = 0;
+  private autoCastAccum = 0;
   private paused = true;
 
   constructor(
@@ -1196,26 +1201,32 @@ export class PlanetScene extends Phaser.Scene {
     }
     const spell = SPELLS.find((s) => s.id === this.state.selectedSpellId);
     if (!spell) return;
+    this.executeSpellAt(spell, wx, wy, false);
+  }
+
+  private executeSpellAt(spell: SpellConfig, wx: number, wy: number, isAuto: boolean): boolean {
     const dist = wrapDist(this.shaman.x, this.shaman.y, wx, wy);
     const rangeMult = this.isNearGuardhouse(this.shaman.x, this.shaman.y) ? 1.45 : 1;
     const res = castSpell(this.state, spell.id, dist, rangeMult);
     if (!res.ok) {
-      this.onToast(res.reason ?? 'Cannot cast');
-      if (res.reason?.includes('range')) {
-        this.rangeCircle.setStrokeStyle(3, 0xe63946, 0.95);
-        this.time.delayedCall(260, () => this.rangeCircle.setStrokeStyle(1.5, 0xc89b4b, 0.55));
+      if (!isAuto) {
+        this.onToast(res.reason ?? 'Cannot cast');
+        if (res.reason?.includes('range')) {
+          this.rangeCircle.setStrokeStyle(3, 0xe63946, 0.95);
+          this.time.delayedCall(260, () => this.rangeCircle.setStrokeStyle(1.5, 0xc89b4b, 0.55));
+        }
       }
-      return;
+      return false;
     }
 
     if (dist > 6) this.shamanDir = dir8FromVec(wrapDelta(this.shaman.x, wx, WORLD_W), wrapDelta(this.shaman.y, wy, WORLD_H));
-    this.castAnimTimer = 0.65;
+    this.castAnimTimer = isAuto ? 0.35 : 0.65;
     const castKey = `shaman_blue_cast_d${this.shamanDir}`;
     if (this.anims.exists(castKey)) this.shaman.play(castKey);
     if (spell.id === 'ghost_army') {
       this.onPlayGhostSound();
     } else {
-      this.playSfx(spell.sound, 0.35);
+      this.playSfx(spell.sound, isAuto ? 0.2 : 0.35);
     }
 
     if (spell.id === 'convert') {
@@ -1339,6 +1350,104 @@ export class PlanetScene extends Phaser.Scene {
 
     this.syncHostileCounts();
     this.onHudSync();
+    return true;
+  }
+
+  /** Pantheon automation: auto-casts unlocked non-terrain spells, siphons Obelisks, and seals Alliances. */
+  private updateAutomation(dt: number): void {
+    if (this.shamanRespawnTimer > 0 || !this.state.autoCastEnabled) return;
+    this.autoCastAccum += dt;
+    if (this.autoCastAccum < 0.45) return;
+    this.autoCastAccum = 0;
+
+    const p = this.state.planets[this.state.activePlanetId];
+    const cfg = getPlanetConfig(p.planetId);
+    const rangeMult = this.isNearGuardhouse(this.shaman.x, this.shaman.y) ? 1.45 : 1;
+    const castRange = getCastRangePx(this.state, p.planetId) * rangeMult;
+
+    // 1. Auto-Alliance (Divinity bough)
+    if (this.state.metaLevels.autoAlliance > 0 && cfg.allianceTribe && !p.allied) {
+      if (formAlliance(this.state, p.planetId)) {
+        this.onToast(`Herald of Unity sealed Alliance with ${cfg.allianceTribe.toUpperCase()}!`);
+        this.onHudSync();
+      }
+    }
+
+    // 2. Auto-Obelisk remote siphon (Mana bough)
+    if (this.state.metaLevels.autoObelisk > 0) {
+      for (const ob of this.obelisks) {
+        if (ob.cooldown <= 0) {
+          ob.cooldown = 35;
+          const gain = claimObeliskMana(this.state, 45);
+          this.spawnSparkBurst(ob.x, ob.y - 20, 0x72efdd, 10);
+          this.spawnFloatingText(ob.x, ob.y - 26, `+${gain} Mana (Siphon)`, '#72efdd');
+          this.onHudSync();
+          break;
+        }
+      }
+    }
+
+    const tryAutoSpell = (id: string, tx: number, ty: number): boolean => {
+      if (!isSpellAutoCastUnlocked(this.state, id)) return false;
+      const sp = SPELLS.find((s) => s.id === id);
+      if (!sp || !isSpellUnlocked(this.state, sp)) return false;
+      if ((this.state.spellCooldowns[id] ?? 0) > 0) return false;
+      return this.executeSpellAt(sp, tx, ty, true);
+    };
+
+    // 3. Auto-Convert: targets the centroid of the nearest cluster of Wildmen in range (Village bough)
+    const popCap = getPopCap(this.state, p.planetId);
+    if (isSpellAutoCastUnlocked(this.state, 'convert') && p.loyalPop < popCap && this.convertCircles.length === 0 && this.wildmen.length > 0) {
+      const centroid = findNearestClusterCentroid(
+        this.shaman.x,
+        this.shaman.y,
+        this.wildmen.map((w) => ({ x: w.x, y: w.y })),
+        castRange,
+        110
+      );
+      if (centroid && tryAutoSpell('convert', centroid.x, centroid.y)) return;
+    }
+
+    // Find nearest hostile target (enemy unit, rival Shaman, or enemy hut) within cast range
+    const enemy = this.findNearestEnemy(this.shaman.x, this.shaman.y, castRange);
+    const rival = !enemy ? this.findNearestHostileShaman(this.shaman.x, this.shaman.y, castRange) : null;
+    const enemyHut = !enemy && !rival ? this.findNearestEnemyHut(this.shaman.x, this.shaman.y, castRange) : null;
+    const combatTarget = enemy
+      ? { x: enemy.x, y: enemy.y, isUnit: true }
+      : rival
+        ? { x: rival.x, y: rival.y, isUnit: true }
+        : enemyHut
+          ? { x: enemyHut.x, y: enemyHut.y, isUnit: false }
+          : null;
+
+    if (!combatTarget) return;
+
+    // 4. Auto-Blessings: Shield, Bloodlust, Ghost Army when enemies are in range (Divinity bough)
+    if (isSpellAutoCastUnlocked(this.state, 'shield') && (this.state.activeBuffs.shield ?? 0) <= 0) {
+      if (tryAutoSpell('shield', this.shaman.x, this.shaman.y)) return;
+    }
+    if (isSpellAutoCastUnlocked(this.state, 'bloodlust') && (this.state.activeBuffs.bloodlust ?? 0) <= 0) {
+      if (tryAutoSpell('bloodlust', this.shaman.x, this.shaman.y)) return;
+    }
+    if (isSpellAutoCastUnlocked(this.state, 'ghost_army') && this.ghosts.length === 0) {
+      if (tryAutoSpell('ghost_army', combatTarget.x, combatTarget.y)) return;
+    }
+
+    // 5. Auto-Hypnotise on hostile enemy units (Mana bough)
+    if (combatTarget.isUnit && p.loyalPop < popCap && tryAutoSpell('hypnotise', combatTarget.x, combatTarget.y)) return;
+
+    // 6. Auto-Cataclysm: Armageddon, Volcano, Angel of Death, Firestorm, Earthquake (Divinity bough)
+    for (const id of ['armageddon', 'volcano', 'angel', 'firestorm', 'earthquake']) {
+      if (tryAutoSpell(id, combatTarget.x, combatTarget.y)) return;
+    }
+
+    // 7. Auto-Storm Spells: Tornado, Lightning, Swarm (War bough)
+    for (const id of ['tornado', 'lightning', 'swarm']) {
+      if (tryAutoSpell(id, combatTarget.x, combatTarget.y)) return;
+    }
+
+    // 8. Auto-Blast: reflex knockback & damage (War bough)
+    tryAutoSpell('blast', combatTarget.x, combatTarget.y);
   }
 
   private applyAreaSpellDamage(wx: number, wy: number, radius: number, unitDmg: number, hutDmg: number): void {
@@ -2913,6 +3022,7 @@ export class PlanetScene extends Phaser.Scene {
       this.updateSpecialists(dt);
       this.updateEnemiesAndRivals(dt);
       this.updateHazardsAndObelisks(dt);
+      this.updateAutomation(dt);
       this.syncWrappedVisuals();
     } catch (err) {
       console.error('PlanetScene step error:', err);

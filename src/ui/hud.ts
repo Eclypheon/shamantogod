@@ -9,10 +9,12 @@ import {
   getPlanetManaPerSec,
   getPopCap,
   getTotalManaPerSec,
+  hasAnyAutoCastUnlocked,
   hasSavedGame,
   isCampaignWon,
   isMetaNodeUnlocked,
   isMetaNodeVisible,
+  isSpellAutoCastUnlocked,
   isSpellUnlocked,
   prestigeToPlanet,
   resetGame,
@@ -64,6 +66,7 @@ export class HudController {
   private elEssenceVal!: HTMLElement;
   private elPopVal!: HTMLElement;
   private elBuffs!: HTMLElement;
+  private elAutoBtn!: HTMLButtonElement;
   private elAscendBtn!: HTMLButtonElement;
   private elTabBtns!: NodeListOf<HTMLButtonElement>;
   private elSpellInfo!: HTMLElement;
@@ -146,6 +149,7 @@ export class HudController {
           </span>
         </div>
         <div class="ribbon-right">
+          <button class="btn" id="hud-auto-toggle" style="display:none;" title="Toggle Pantheon Auto-Cast">Auto: On</button>
           <button class="btn" data-tab="tribe">Tribe</button>
           <button class="btn" data-tab="planets">Worlds</button>
           <button class="btn" id="hud-open-pantheon">Pantheon</button>
@@ -197,6 +201,7 @@ export class HudController {
     this.elEssenceVal = this.root.querySelector('#hud-essence')!;
     this.elPopVal = this.root.querySelector('#hud-pop')!;
     this.elBuffs = this.root.querySelector('#hud-buffs')!;
+    this.elAutoBtn = this.root.querySelector('#hud-auto-toggle')!;
     this.elAscendBtn = this.root.querySelector('#hud-ascend')!;
     this.elTabBtns = this.root.querySelectorAll('[data-tab]');
     this.elSpellInfo = this.root.querySelector('#hud-spell-info')!;
@@ -267,6 +272,14 @@ export class HudController {
       this.titleOpen = true;
       this.updatePauseState();
       this.renderTitleScreen();
+    });
+
+    this.elAutoBtn.addEventListener('click', () => {
+      this.state.autoCastEnabled = !this.state.autoCastEnabled;
+      saveGame(this.state);
+      this.showToast(this.state.autoCastEnabled ? 'Pantheon Auto-Cast: ON' : 'Pantheon Auto-Cast: OFF');
+      this.sync();
+      if (this.activeTab === 'tribe') this.renderDrawer();
     });
 
     this.elAscendBtn.addEventListener('click', () => {
@@ -791,6 +804,14 @@ export class HudController {
       .join('');
     this.elBuffs.innerHTML = activeBuffHtml;
 
+    if (hasAnyAutoCastUnlocked(this.state)) {
+      this.elAutoBtn.style.display = 'inline-block';
+      this.elAutoBtn.textContent = this.state.autoCastEnabled ? 'Auto: On' : 'Auto: Off';
+      this.elAutoBtn.classList.toggle('active', this.state.autoCastEnabled);
+    } else {
+      this.elAutoBtn.style.display = 'none';
+    }
+
     if (nextPlanet && nextPlanet.unlocked) {
       this.elAscendBtn.style.display = 'inline-block';
       this.elAscendBtn.textContent = `Ascend ${ROMAN[nextPlanet.planetId - 1] ?? nextPlanet.planetId}`;
@@ -854,8 +875,10 @@ export class HudController {
       const costEl = this.elSpellDock.querySelector<HTMLElement>(`[data-cost="${s.id}"]`);
       if (!btn || !costEl) continue;
       const cd = this.state.spellCooldowns[s.id] ?? 0;
+      const autoOn = this.state.autoCastEnabled && isSpellAutoCastUnlocked(this.state, s.id);
       btn.classList.toggle('active', this.state.selectedSpellId === s.id);
-      costEl.textContent = cd > 0 ? `${cd.toFixed(1)}s` : s.isStoneHead ? 'Free' : `${s.manaCost} M`;
+      const baseCost = cd > 0 ? `${cd.toFixed(1)}s` : s.isStoneHead ? 'Free' : `${s.manaCost} M`;
+      costEl.textContent = autoOn && cd <= 0 ? `${baseCost} · Auto` : baseCost;
     }
 
     const activeSpell = unlocked.find((s) => s.id === this.state.selectedSpellId) ?? unlocked[0];

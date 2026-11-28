@@ -8,13 +8,16 @@ import {
   claimObeliskMana,
   computeDominance,
   createInitialState,
+  findNearestClusterCentroid,
   formAlliance,
   getCastRangePx,
   getMaxHutsForPop,
   getMaxTrainingBuildings,
   getRoleUnitCap,
+  hasAnyAutoCastUnlocked,
   hydrateState,
   isMetaNodeVisible,
+  isSpellAutoCastUnlocked,
   isTribeAllied,
   onBraveTrained,
   onBuildingConstructed,
@@ -196,6 +199,48 @@ describe('Shaman to God simulation', () => {
     expect(autoOrderUnlockedBuildings(state, 1)).toBe('firewarrior_hut');
     onBuildingConstructed(state, 'firewarrior_hut');
     expect(autoOrderUnlockedBuildings(state, 1)).toBe('guard_tower');
+  });
+
+  it('maps Pantheon auto-cast unlocks cleanly and never automates terrain or teleport spells', () => {
+    const state = createInitialState();
+    expect(hasAnyAutoCastUnlocked(state)).toBe(false);
+    expect(isSpellAutoCastUnlocked(state, 'convert')).toBe(false);
+    expect(isSpellAutoCastUnlocked(state, 'blast')).toBe(false);
+
+    state.metaLevels.autoConvert = 1;
+    state.metaLevels.autoBlast = 1;
+    state.metaLevels.autoStormSpells = 1;
+    state.metaLevels.autoBlessings = 1;
+    state.metaLevels.autoHypnotise = 1;
+    state.metaLevels.autoCataclysm = 1;
+
+    expect(hasAnyAutoCastUnlocked(state)).toBe(true);
+    expect(isSpellAutoCastUnlocked(state, 'convert')).toBe(true);
+    expect(isSpellAutoCastUnlocked(state, 'blast')).toBe(true);
+    expect(isSpellAutoCastUnlocked(state, 'lightning')).toBe(true);
+    expect(isSpellAutoCastUnlocked(state, 'ghost_army')).toBe(true);
+    expect(isSpellAutoCastUnlocked(state, 'hypnotise')).toBe(true);
+    expect(isSpellAutoCastUnlocked(state, 'volcano')).toBe(true);
+
+    // Terrain & teleport spells stay manual
+    expect(isSpellAutoCastUnlocked(state, 'flatten')).toBe(false);
+    expect(isSpellAutoCastUnlocked(state, 'landbridge')).toBe(false);
+    expect(isSpellAutoCastUnlocked(state, 'erode')).toBe(false);
+    expect(isSpellAutoCastUnlocked(state, 'swamp')).toBe(false);
+    expect(isSpellAutoCastUnlocked(state, 'teleport')).toBe(false);
+  });
+
+  it('targets the centroid of the nearest dense Wildmen cluster for Auto-Convert', () => {
+    const wildmen = [
+      { x: 100, y: 100 },
+      { x: 120, y: 110 },
+      { x: 110, y: 120 },
+      { x: 400, y: 400 },
+    ];
+    const center = findNearestClusterCentroid(80, 90, wildmen, 220, 110);
+    expect(center).not.toBeNull();
+    expect(Math.round(center!.x)).toBe(110);
+    expect(Math.round(center!.y)).toBe(110);
   });
 
   it('safely hydrates partial or older saved states without missing planets', () => {

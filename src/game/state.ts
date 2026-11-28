@@ -45,6 +45,7 @@ export interface GameState {
   activeBuffs: Record<string, number>;
   tutorialStep: number;
   muted: boolean;
+  autoCastEnabled: boolean;
   metaLevels: Record<MetaUpgradeId, number>;
   planets: Record<number, PlanetProgress>;
 }
@@ -112,6 +113,7 @@ export function createInitialState(now = Date.now()): GameState {
     activeBuffs: {},
     tutorialStep: 0,
     muted: false,
+    autoCastEnabled: true,
     metaLevels: createDefaultMetaLevels(),
     planets,
   };
@@ -678,6 +680,63 @@ export function resetGame(): GameState {
 
 export function isCampaignWon(state: GameState): boolean {
   return PLANETS.every((cfg) => state.planets[cfg.id]?.conquered);
+}
+
+/** Returns true if the given spell's Pantheon auto-cast unlock is owned (terrain & teleport spells are never automated). */
+export function isSpellAutoCastUnlocked(state: GameState, spellId: string): boolean {
+  const m = state.metaLevels;
+  if (spellId === 'convert') return m.autoConvert > 0;
+  if (spellId === 'blast') return m.autoBlast > 0;
+  if (spellId === 'swarm' || spellId === 'lightning' || spellId === 'tornado') return m.autoStormSpells > 0;
+  if (spellId === 'shield' || spellId === 'bloodlust' || spellId === 'ghost_army') return m.autoBlessings > 0;
+  if (spellId === 'hypnotise') return m.autoHypnotise > 0;
+  if (spellId === 'earthquake' || spellId === 'firestorm' || spellId === 'angel' || spellId === 'volcano' || spellId === 'armageddon') {
+    return m.autoCataclysm > 0;
+  }
+  return false;
+}
+
+export function hasAnyAutoCastUnlocked(state: GameState): boolean {
+  const m = state.metaLevels;
+  return (
+    m.autoConvert > 0 ||
+    m.autoBlast > 0 ||
+    m.autoStormSpells > 0 ||
+    m.autoBlessings > 0 ||
+    m.autoHypnotise > 0 ||
+    m.autoCataclysm > 0 ||
+    m.autoObelisk > 0 ||
+    m.autoAlliance > 0
+  );
+}
+
+/** Finds the centroid (center) of the nearest dense cluster of points within maxRange of (originX, originY). */
+export function findNearestClusterCentroid(
+  originX: number,
+  originY: number,
+  points: { x: number; y: number }[],
+  maxRange: number,
+  clusterRadius = 110
+): { x: number; y: number } | null {
+  const inRange = points.filter((pt) => Math.hypot(pt.x - originX, pt.y - originY) <= maxRange);
+  if (inRange.length === 0) return null;
+
+  // Pick anchor with most neighbors within clusterRadius, breaking ties by closest to Shaman
+  let bestAnchor = inRange[0];
+  let bestScore = -Infinity;
+  for (const pt of inRange) {
+    const neighbors = inRange.filter((o) => Math.hypot(o.x - pt.x, o.y - pt.y) <= clusterRadius);
+    const dist = Math.hypot(pt.x - originX, pt.y - originY);
+    const score = neighbors.length * 1000 - dist;
+    if (score > bestScore) {
+      bestScore = score;
+      bestAnchor = pt;
+    }
+  }
+  const cluster = inRange.filter((o) => Math.hypot(o.x - bestAnchor.x, o.y - bestAnchor.y) <= clusterRadius);
+  const cx = cluster.reduce((sum, p) => sum + p.x, 0) / cluster.length;
+  const cy = cluster.reduce((sum, p) => sum + p.y, 0) / cluster.length;
+  return { x: cx, y: cy };
 }
 
 export function loadGame(): GameState {
