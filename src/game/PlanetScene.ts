@@ -38,12 +38,11 @@ import {
   playTeleportVfx,
   type ActiveHazard,
 } from './spellVfx';
-
-const WORLD_W = 1600;
-const WORLD_H = 1000;
+import { PlanetTerrain, WORLD_H, WORLD_W, wrapCoord, wrapDelta, wrapDist } from './terrain';
 
 type BraveState =
   | 'patrol'
+  | 'stomp_site'
   | 'seek_tree'
   | 'chop_tree'
   | 'carry_wood'
@@ -54,6 +53,15 @@ type BraveState =
   | 'go_train'
   | 'training'
   | 'fight_enemy';
+
+interface GhostActor {
+  sprite: Phaser.GameObjects.Sprite;
+  x: number;
+  y: number;
+  hp: number;
+  remaining: number;
+  dir: number;
+}
 
 interface TrainingBuildingNode {
   role: 'warrior' | 'preacher' | 'firewarrior';
@@ -95,6 +103,8 @@ interface BuildSite {
   barFill: Phaser.GameObjects.Rectangle;
   woodDelivered: number;
   woodNeeded: number;
+  needsStomp: boolean;
+  stompProgress: number;
 }
 
 interface PlayerHutNode {
@@ -251,6 +261,7 @@ export class PlanetScene extends Phaser.Scene {
   private state!: GameState;
   private onHudSync!: () => void;
   private onToast!: (msg: string) => void;
+  private onPlayGhostSound!: () => void;
 
   private shaman!: Phaser.GameObjects.Sprite;
   private shamanLabel!: Phaser.GameObjects.Text;
@@ -266,10 +277,15 @@ export class PlanetScene extends Phaser.Scene {
   private wasd!: Record<'W' | 'A' | 'S' | 'D', Phaser.Input.Keyboard.Key>;
   private joystickVec = { x: 0, y: 0 };
 
-  private terrainGfx!: Phaser.GameObjects.Graphics;
+  private terrain!: PlanetTerrain;
+  private terrainCanvas!: Phaser.Textures.CanvasTexture;
+  private terrainImages: Phaser.GameObjects.Image[] = [];
+  private cameraZoom = 1.0;
+  private lastPinchDist = 0;
   private trees: TreeNode[] = [];
   private obelisks: ObeliskNode[] = [];
   private hazards: ActiveHazard[] = [];
+  private ghosts: GhostActor[] = [];
   private shamanBuffAura!: Phaser.GameObjects.Arc;
   private playerHuts: PlayerHutNode[] = [];
   private towers: { x: number; y: number; sprite: Phaser.GameObjects.Sprite }[] = [];
@@ -291,11 +307,24 @@ export class PlanetScene extends Phaser.Scene {
   private simAccum = 0;
   private paused = true;
 
-  constructor(state: GameState, onHudSync: () => void, onToast: (msg: string) => void) {
+  constructor(
+    state: GameState,
+    onHudSync: () => void,
+    onToast: (msg: string) => void,
+    onPlayGhostSound: () => void = () => {}
+  ) {
     super('PlanetScene');
     this.state = state;
     this.onHudSync = onHudSync;
     this.onToast = onToast;
+    this.onPlayGhostSound = onPlayGhostSound;
+  }
+
+  adjustZoom(delta: number): void {
+    this.cameraZoom = Phaser.Math.Clamp(this.cameraZoom + delta, 0.58, 1.65);
+    if (this.cameras?.main) {
+      this.cameras.main.setZoom(this.cameraZoom);
+    }
   }
 
   setPaused(val: boolean): void {
@@ -346,7 +375,18 @@ export class PlanetScene extends Phaser.Scene {
 
   create(): void {
     this.registerAnimations();
-    this.terrainGfx = this.add.graphics();
+    this.terrainCanvas = this.textures.createCanvas('planet_terrain', WORLD_W, WORLD_H)!;
+    // 3x3 grid of standard Images sharing the CanvasTexture (works in all WebGL/iOS GPUs without Power-of-Two restriction!)
+    this.terrainImages = [];
+    for (let oy = -1; oy <= 1; oy++) {
+      for (let ox = -1; ox <= 1; ox++) {
+        const img = this.add
+          .image(ox * WORLD_W, oy * WORLD_H, 'planet_terrain')
+          .setOrigin(0, 0)
+          .setDepth(-10);
+        this.terrainImages.push(img);
+      }
+    }
 
     this.shaman = this.add.sprite(WORLD_W / 2, WORLD_H / 2, 'units', 'shaman_blue_stand_d1_00');
     this.shaman.setOrigin(0.5, 1.0).setScale(1.4).setDepth(500);
@@ -377,8 +417,29 @@ export class PlanetScene extends Phaser.Scene {
     this.rangeCircle.setStrokeStyle(1.5, 0xc89b4b, 0.55).setDepth(5);
     this.shamanBuffAura = this.add.circle(this.shaman.x, this.shaman.y - 16, 26, 0x72efdd, 0.16).setStrokeStyle(2, 0x72efdd, 0.85).setVisible(false).setDepth(501);
 
-    this.cameras.main.setBounds(0, 0, WORLD_W, WORLD_H);
-    this.cameras.main.startFollow(this.shaman, true, 0.14, 0.14);
+    // No rectangular camera bounds: continuous spherical/toroidal globe scrolling!
+    this.cameras.main.startFollow(this.shaman, true, 0.18, 0.18);
+    this.cameras.main.setZoom(this.cameraZoom);
+
+    // Desktop mouse wheel zoom + touch pinch-to-zoom
+    this.input.addPointer(1);
+    this.input.on('wheel', (_pointer: Phaser.Input.Pointer, _objs: unknown, _dx: number, dy: number) => {
+      if (this.paused) return;
+      this.adjustZoom(dy > 0 ? -0.1 : 0.1);
+    });
+    this.input.on('pointermove', () => {
+      const p1 = this.input.pointer1;
+      const p2 = this.input.pointer2;
+      if (p1.isDown && p2.isDown) {
+        const d = Phaser.Math.Distance.Between(p1.x, p1.y, p2.x, p2.y);
+        if (this.lastPinchDist > 0) {
+          this.adjustZoom((d - this.lastPinchDist) * 0.003);
+        }
+        this.lastPinchDist = d;
+      } else {
+        this.lastPinchDist = 0;
+      }
+    });
 
     if (this.input.keyboard) {
       this.cursors = this.input.keyboard.createCursorKeys();
@@ -391,11 +452,11 @@ export class PlanetScene extends Phaser.Scene {
     }
 
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-      if (this.paused) return;
+      if (this.paused || (this.input.pointer1.isDown && this.input.pointer2.isDown)) return;
       const target = pointer.event?.target as HTMLElement | null;
       if (target && typeof target.closest === 'function' && target.closest('#hud')) return;
       const worldPt = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
-      this.handleCastAt(worldPt.x, worldPt.y);
+      this.handleCastAt(wrapCoord(worldPt.x, WORLD_W), wrapCoord(worldPt.y, WORLD_H));
     });
 
     this.rebuildPlanetVisuals();
@@ -434,6 +495,8 @@ export class PlanetScene extends Phaser.Scene {
     this.obelisks = [];
     for (const hz of this.hazards) hz.container.destroy();
     this.hazards = [];
+    for (const gh of this.ghosts) gh.sprite.destroy();
+    this.ghosts = [];
     for (const h of this.playerHuts) {
       h.sprite.destroy();
       h.hpBg.destroy();
@@ -506,6 +569,13 @@ export class PlanetScene extends Phaser.Scene {
     this.convertCircles = [];
   }
 
+  private redrawTerrain(): void {
+    const cfg = getPlanetConfig(this.state.activePlanetId);
+    const ctx = this.terrainCanvas.getContext();
+    this.terrain.renderToCanvas(ctx, cfg.groundColor, cfg.waterColor);
+    this.terrainCanvas.refresh();
+  }
+
   rebuildPlanetVisuals(): void {
     const cfg = getPlanetConfig(this.state.activePlanetId);
     const p = this.state.planets[cfg.id];
@@ -516,46 +586,9 @@ export class PlanetScene extends Phaser.Scene {
     this.shaman.setPosition(WORLD_W / 2, WORLD_H / 2);
     this.enemyRaidTimer = cfg.id === 1 ? 45 : Math.max(12, 30 - cfg.id * 1.5);
 
-    // Rich layered Populous island terrain (deep sea -> shoal -> sandy shore -> organic sunlit grass -> village paths)
-    this.terrainGfx.clear();
-    this.terrainGfx.fillStyle(cfg.waterColor, 1);
-    this.terrainGfx.fillRect(0, 0, WORLD_W, WORLD_H);
-
-    // Coastal shoal glow + subtle wave rings
-    this.terrainGfx.fillStyle(0x2a7f9e, 0.32);
-    this.terrainGfx.fillEllipse(WORLD_W / 2, WORLD_H / 2, WORLD_W * 0.89, WORLD_H * 0.86);
-    this.terrainGfx.lineStyle(2, 0xcaf0f8, 0.14);
-    this.terrainGfx.strokeEllipse(WORLD_W / 2, WORLD_H / 2, WORLD_W * 0.87, WORLD_H * 0.84);
-
-    // Warm sandy beach rim
-    this.terrainGfx.fillStyle(0xc2a878, 1);
-    this.terrainGfx.fillEllipse(WORLD_W / 2, WORLD_H / 2, WORLD_W * 0.85, WORLD_H * 0.82);
-
-    // Main organic terrain landmass with subtle sunlit plateaus
-    this.terrainGfx.fillStyle(cfg.groundColor, 1);
-    this.terrainGfx.fillEllipse(WORLD_W / 2, WORLD_H / 2, WORLD_W * 0.81, WORLD_H * 0.77);
-    this.terrainGfx.fillStyle(0xffffff, 0.06);
-    this.terrainGfx.fillEllipse(WORLD_W / 2 - 40, WORLD_H / 2 - 20, 420, 270);
-    this.terrainGfx.fillEllipse(WORLD_W / 2 + 340, WORLD_H / 2 - 40, 290, 200);
-    this.terrainGfx.fillEllipse(WORLD_W / 2 - 340, WORLD_H / 2 + 30, 260, 180);
-
-    // Soft packed-earth village center & paths leading toward Obelisks
-    this.terrainGfx.fillStyle(0x9b8054, 0.34);
-    this.terrainGfx.fillEllipse(WORLD_W / 2, WORLD_H / 2 + 12, 230, 145);
-    this.terrainGfx.lineStyle(12, 0x9b8054, 0.2);
-    this.terrainGfx.lineBetween(WORLD_W / 2, WORLD_H / 2, WORLD_W / 2 - 245, WORLD_H / 2 - 150);
-    this.terrainGfx.lineBetween(WORLD_W / 2, WORLD_H / 2, WORLD_W / 2 + 235, WORLD_H / 2 - 145);
-    this.terrainGfx.lineBetween(WORLD_W / 2, WORLD_H / 2, WORLD_W / 2, WORLD_H / 2 + 210);
-
-    // Subtle organic tufts & pebbles
-    this.terrainGfx.fillStyle(0x000000, 0.08);
-    for (let i = 0; i < 42; i++) {
-      const ang = i * 2.39996;
-      const r = 110 + (i % 7) * 68;
-      const px = WORLD_W / 2 + Math.cos(ang) * r * 1.15;
-      const py = WORLD_H / 2 + Math.sin(ang) * r * 0.68;
-      this.terrainGfx.fillEllipse(px, py, 16 + (i % 3) * 8, 8 + (i % 2) * 4);
-    }
+    // Periodic heightmap terrain with undulating hills, mountains, and rivers (Planet 5+ requires Landbridge!)
+    this.terrain = new PlanetTerrain(cfg.id);
+    this.redrawTerrain();
 
     // Only 7 sparse Populous trees (regrow slowly in 75s)
     const treeOffsets = [
@@ -669,6 +702,7 @@ export class PlanetScene extends Phaser.Scene {
     if (cfg.id >= 2 && p.loyalPop === 0 && p.hutsBuilt === 0) {
       this.triggerOpeningConvert();
     }
+    this.syncWrappedVisuals();
   }
 
   private getHutSlotPos(idx: number): { x: number; y: number } {
@@ -818,8 +852,9 @@ export class PlanetScene extends Phaser.Scene {
 
     if (!kind) return;
     const sp = this.add.sprite(pos.x, pos.y, 'world', 'hut_plan_blue').setOrigin(0.5, 0.92).setDepth(pos.y - 1);
+    const needsStomp = !this.terrain.isFlat(pos.x, pos.y);
     const barBg = this.add.rectangle(pos.x, pos.y - 44, 38, 5, 0x1a120a, 0.85).setDepth(920);
-    const barFill = this.add.rectangle(pos.x - 18, pos.y - 44, 0, 3, 0xe9c46a, 1).setOrigin(0, 0.5).setDepth(921);
+    const barFill = this.add.rectangle(pos.x - 18, pos.y - 44, 0, 3, needsStomp ? 0xb08968 : 0xe9c46a, 1).setOrigin(0, 0.5).setDepth(921);
     this.buildSite = {
       kind,
       x: pos.x,
@@ -829,6 +864,8 @@ export class PlanetScene extends Phaser.Scene {
       barFill,
       woodDelivered: 0,
       woodNeeded: kind === 'hut' ? 3 : 4,
+      needsStomp,
+      stompProgress: needsStomp ? 0 : 1,
     };
   }
 
@@ -1159,7 +1196,7 @@ export class PlanetScene extends Phaser.Scene {
     }
     const spell = SPELLS.find((s) => s.id === this.state.selectedSpellId);
     if (!spell) return;
-    const dist = Phaser.Math.Distance.Between(this.shaman.x, this.shaman.y, wx, wy);
+    const dist = wrapDist(this.shaman.x, this.shaman.y, wx, wy);
     const rangeMult = this.isNearGuardhouse(this.shaman.x, this.shaman.y) ? 1.45 : 1;
     const res = castSpell(this.state, spell.id, dist, rangeMult);
     if (!res.ok) {
@@ -1171,11 +1208,15 @@ export class PlanetScene extends Phaser.Scene {
       return;
     }
 
-    if (dist > 6) this.shamanDir = dir8FromVec(wx - this.shaman.x, wy - this.shaman.y);
+    if (dist > 6) this.shamanDir = dir8FromVec(wrapDelta(this.shaman.x, wx, WORLD_W), wrapDelta(this.shaman.y, wy, WORLD_H));
     this.castAnimTimer = 0.65;
     const castKey = `shaman_blue_cast_d${this.shamanDir}`;
     if (this.anims.exists(castKey)) this.shaman.play(castKey);
-    this.playSfx(spell.sound, 0.35);
+    if (spell.id === 'ghost_army') {
+      this.onPlayGhostSound();
+    } else {
+      this.playSfx(spell.sound, 0.35);
+    }
 
     if (spell.id === 'convert') {
       this.spawnConvertCircle(wx, wy);
@@ -1184,11 +1225,57 @@ export class PlanetScene extends Phaser.Scene {
     } else if (spell.kind === 'teleport') {
       const oldX = this.shaman.x;
       const oldY = this.shaman.y;
-      const nx = Phaser.Math.Clamp(wx, 120, WORLD_W - 120);
-      const ny = Phaser.Math.Clamp(wy, 120, WORLD_H - 120);
+      const nx = wrapCoord(wx, WORLD_W);
+      const ny = wrapCoord(wy, WORLD_H);
       this.shaman.setPosition(nx, ny);
       playTeleportVfx(this, oldX, oldY, nx, ny);
       this.spawnFloatingText(nx, ny, 'Teleport', '#90e0ef');
+    } else if (spell.id === 'flatten') {
+      this.terrain.flattenArea(wx, wy, spell.radius);
+      this.redrawTerrain();
+      if (this.buildSite && this.buildSite.needsStomp && wrapDist(wx, wy, this.buildSite.x, this.buildSite.y) <= spell.radius) {
+        this.buildSite.needsStomp = false;
+        this.buildSite.stompProgress = 1;
+        this.buildSite.barFill.setFillStyle(0xe9c46a, 1).setSize(0, 3);
+      }
+      this.spawnSparkBurst(wx, wy, 0xd4a373, 14);
+      const wave = this.add.circle(wx, wy, 16, 0xd4a373, 0.28).setStrokeStyle(3, 0xe9c46a, 0.9).setDepth(900);
+      this.tweens.add({ targets: wave, radius: spell.radius, alpha: 0, duration: 480, onComplete: () => wave.destroy() });
+      this.spawnFloatingText(wx, wy, 'Ground Flattened!', '#e9c46a');
+    } else if (spell.id === 'landbridge') {
+      const bridged = this.terrain.raiseLandbridge(this.shaman.x, this.shaman.y, wx, wy, 32);
+      this.redrawTerrain();
+      const dx = wrapDelta(this.shaman.x, wx, WORLD_W);
+      const dy = wrapDelta(this.shaman.y, wy, WORLD_H);
+      for (let i = 1; i <= 5; i++) {
+        const bx = wrapCoord(this.shaman.x + (dx * i) / 5, WORLD_W);
+        const by = wrapCoord(this.shaman.y + (dy * i) / 5, WORLD_H);
+        this.spawnSparkBurst(bx, by, 0xc2a878, 6);
+      }
+      this.spawnFloatingText(wx, wy, bridged > 0 ? 'Landbridge Raised!' : 'Earth Raised!', '#e9c46a');
+    } else if (spell.id === 'erode') {
+      const sunk = this.terrain.erodeArea(wx, wy, spell.radius);
+      this.redrawTerrain();
+      playEarthquakeVfx(this, wx, wy, spell.radius);
+      this.applyAreaSpellDamage(wx, wy, spell.radius, 65, 115);
+      this.spawnFloatingText(wx, wy, sunk > 0 ? 'Land Eroded!' : 'Erode!', '#72efdd');
+    } else if (spell.id === 'ghost_army') {
+      // Summon 4 spectral Ghost Warrior decoys that march forward and absorb enemy attacks!
+      for (let i = 0; i < 4; i++) {
+        const ang = (i / 4) * Math.PI * 2;
+        const gx = wrapCoord(wx + Math.cos(ang) * 28, WORLD_W);
+        const gy = wrapCoord(wy + Math.sin(ang) * 20, WORLD_H);
+        const gsp = this.add.sprite(gx, gy, 'units', 'warrior_blue_run_d1_00')
+          .setOrigin(0.5, 1)
+          .setScale(1.05)
+          .setAlpha(0.6)
+          .setTint(0x90e0ef)
+          .setDepth(gy);
+        if (this.anims.exists('warrior_blue_run_d1')) gsp.play('warrior_blue_run_d1');
+        this.ghosts.push({ sprite: gsp, x: gx, y: gy, hp: 90, remaining: 14, dir: 1 });
+      }
+      this.spawnSparkBurst(wx, wy, 0x90e0ef, 14);
+      this.spawnFloatingText(wx, wy, 'Ghost Army Summoned!', '#90e0ef');
     } else if (spell.id === 'lightning') {
       playLightningVfx(this, wx, wy);
       this.applyAreaSpellDamage(wx, wy, spell.radius, 85, 65);
@@ -1198,7 +1285,7 @@ export class PlanetScene extends Phaser.Scene {
     } else if (spell.id === 'firestorm') {
       playFirestormVfx(this, wx, wy, spell.radius);
       this.applyAreaSpellDamage(wx, wy, spell.radius, 95, 80);
-    } else if (spell.id === 'earthquake' || spell.id === 'erode') {
+    } else if (spell.id === 'earthquake') {
       playEarthquakeVfx(this, wx, wy, spell.radius);
       this.applyAreaSpellDamage(wx, wy, spell.radius, 50, 110);
     } else if (spell.id === 'hypnotise') {
@@ -1518,6 +1605,10 @@ export class PlanetScene extends Phaser.Scene {
           }
         }
         if (this.buildSite) {
+          if (this.buildSite.needsStomp) {
+            b.fsm = 'stomp_site';
+            continue;
+          }
           const tree = this.findNearestTree(b.x, b.y);
           if (tree) {
             b.targetTree = tree;
@@ -1557,6 +1648,33 @@ export class PlanetScene extends Phaser.Scene {
             b.patrolX = WORLD_W / 2 + Phaser.Math.Between(-120, 120);
             b.patrolY = WORLD_H / 2 + Phaser.Math.Between(-80, 80);
             b.timer = Phaser.Math.FloatBetween(1.4, 3.2);
+          }
+        }
+      } else if (b.fsm === 'stomp_site') {
+        if (!this.buildSite || !this.buildSite.needsStomp) {
+          b.fsm = 'patrol';
+        } else {
+          const d = Phaser.Math.Distance.Between(b.x, b.y, this.buildSite.x, this.buildSite.y + 8);
+          if (d <= 18) {
+            b.dir = dir8FromVec(this.buildSite.x - b.x, this.buildSite.y - b.y);
+            this.playBraveAnim(b, 'work');
+            this.buildSite.stompProgress = Math.min(1, this.buildSite.stompProgress + dt * 0.34 * timberMult);
+            this.buildSite.barFill.setFillStyle(0xb08968, 1).setSize(36 * this.buildSite.stompProgress, 3);
+            if (this.buildSite.stompProgress >= 1) {
+              this.buildSite.needsStomp = false;
+              this.terrain.stompFootprint(this.buildSite.x, this.buildSite.y);
+              this.redrawTerrain();
+              this.buildSite.barFill.setFillStyle(0xe9c46a, 1).setSize(0, 3);
+              this.spawnSparkBurst(this.buildSite.x, this.buildSite.y, 0xc2a878, 6);
+              b.fsm = 'patrol';
+            }
+          } else {
+            const dx = (this.buildSite.x - b.x) / d;
+            const dy = (this.buildSite.y + 8 - b.y) / d;
+            b.x += dx * 44 * dt;
+            b.y += dy * 44 * dt;
+            b.dir = dir8FromVec(dx, dy);
+            this.playBraveAnim(b, 'run');
           }
         }
       } else if (b.fsm === 'go_train') {
@@ -2134,22 +2252,34 @@ export class PlanetScene extends Phaser.Scene {
         }
       } else {
         e.attackTimer = Math.max(0, e.attackTimer - dt);
+        const invisActive = (this.state.activeBuffs.invisibility ?? 0) > 0;
+        const nearGhost = this.ghosts.find((g) => g.hp > 0 && Phaser.Math.Distance.Between(e.x, e.y, g.x, g.y) <= 32);
         const nearShaman =
+          !invisActive &&
+          !nearGhost &&
           this.shamanRespawnTimer <= 0 &&
           Phaser.Math.Distance.Between(e.x, e.y, this.shaman.x, this.shaman.y) <= 32;
-        const nearWarrior = this.specialists.find((s) => s.garrisonedTowerIdx < 0 && Phaser.Math.Distance.Between(e.x, e.y, s.x, s.y) <= 28);
-        const nearBrave = this.braves.find((b) => b.fsm !== 'breeding' && b.fsm !== 'training' && Phaser.Math.Distance.Between(e.x, e.y, b.x, b.y) <= 26);
-        const nearHut = this.playerHuts.find((h) => h.hp > 0 && Phaser.Math.Distance.Between(e.x, e.y, h.x, h.y) <= 38);
+        const nearWarrior =
+          !invisActive && !nearGhost
+            ? this.specialists.find((s) => s.garrisonedTowerIdx < 0 && Phaser.Math.Distance.Between(e.x, e.y, s.x, s.y) <= 28)
+            : undefined;
+        const nearBrave =
+          !invisActive && !nearGhost
+            ? this.braves.find((b) => b.fsm !== 'breeding' && b.fsm !== 'training' && Phaser.Math.Distance.Between(e.x, e.y, b.x, b.y) <= 26)
+            : undefined;
+        const nearHut = !nearGhost ? this.playerHuts.find((h) => h.hp > 0 && Phaser.Math.Distance.Between(e.x, e.y, h.x, h.y) <= 38) : undefined;
 
-        if (nearShaman || nearWarrior || nearBrave || nearHut) {
-          const tx = nearShaman ? this.shaman.x : nearWarrior ? nearWarrior.x : nearBrave ? nearBrave.x : nearHut!.x;
-          const ty = nearShaman ? this.shaman.y : nearWarrior ? nearWarrior.y : nearBrave ? nearBrave.y : nearHut!.y;
+        if (nearGhost || nearShaman || nearWarrior || nearBrave || nearHut) {
+          const tx = nearGhost ? nearGhost.x : nearShaman ? this.shaman.x : nearWarrior ? nearWarrior.x : nearBrave ? nearBrave.x : nearHut!.x;
+          const ty = nearGhost ? nearGhost.y : nearShaman ? this.shaman.y : nearWarrior ? nearWarrior.y : nearBrave ? nearBrave.y : nearHut!.y;
           e.dir = dir4FromVec(tx - e.x, ty - e.y);
           const pk = `warrior_${e.tribe}_punch_d${e.dir}`;
           if (this.anims.exists(pk) && e.sprite.anims.currentAnim?.key !== pk) e.sprite.play(pk);
           if (e.attackTimer <= 0) {
             e.attackTimer = 1.1;
-            if ((this.state.activeBuffs.shield ?? 0) <= 0) {
+            if (nearGhost) {
+              nearGhost.hp -= 14;
+            } else if ((this.state.activeBuffs.shield ?? 0) <= 0) {
               if (nearShaman) {
                 this.damagePlayerShaman(11);
               } else if (nearWarrior) {
@@ -2164,6 +2294,12 @@ export class PlanetScene extends Phaser.Scene {
             }
           }
         } else {
+          // Taunt: hostile enemies are drawn toward nearby Ghost Army decoys!
+          const tauntGhost = this.ghosts.find((g) => g.hp > 0 && Phaser.Math.Distance.Between(e.x, e.y, g.x, g.y) <= 155);
+          if (tauntGhost) {
+            e.targetX = tauntGhost.x;
+            e.targetY = tauntGhost.y;
+          }
           const dist = Phaser.Math.Distance.Between(e.x, e.y, e.targetX, e.targetY);
           if (dist < 6) {
             e.waitTimer -= dt;
@@ -2178,8 +2314,15 @@ export class PlanetScene extends Phaser.Scene {
           } else {
             const dx = (e.targetX - e.x) / dist;
             const dy = (e.targetY - e.y) / dist;
-            e.x += dx * 34 * dt;
-            e.y += dy * 34 * dt;
+            const nx = e.x + dx * 34 * dt;
+            const ny = e.y + dy * 34 * dt;
+            if (this.terrain.isWalkable(nx, ny)) {
+              e.x = nx;
+              e.y = ny;
+            } else {
+              e.targetX = e.x + Phaser.Math.Between(-60, 60);
+              e.targetY = e.y + Phaser.Math.Between(-50, 50);
+            }
             e.dir = dir4FromVec(dx, dy);
             const rk = `warrior_${e.tribe}_run_d${e.dir}`;
             if (this.anims.exists(rk) && e.sprite.anims.currentAnim?.key !== rk) e.sprite.play(rk);
@@ -2211,17 +2354,21 @@ export class PlanetScene extends Phaser.Scene {
 
       rs.attackTimer = Math.max(0, rs.attackTimer - dt);
       const isAlly = p.allied && cfg.allianceTribe === rs.tribe;
-      // Rival Shamans can attack ANY nearby player unit (Shaman, Warriors, Braves, Preachers, Fire Warriors)!
+      const invisActive = (this.state.activeBuffs.invisibility ?? 0) > 0;
+      // Rival Shamans can attack ANY visible nearby player unit (or Ghost decoy)!
       const nearPlayerShaman =
         !isAlly &&
+        !invisActive &&
         this.shamanRespawnTimer <= 0 &&
         Phaser.Math.Distance.Between(rs.x, rs.y, this.shaman.x, this.shaman.y) <= 42;
-      const nearSpec = !isAlly
-        ? this.specialists.find((s) => s.garrisonedTowerIdx < 0 && Phaser.Math.Distance.Between(rs.x, rs.y, s.x, s.y) <= 40)
-        : undefined;
-      const nearBrave = !isAlly
-        ? this.braves.find((b) => b.fsm !== 'breeding' && Phaser.Math.Distance.Between(rs.x, rs.y, b.x, b.y) <= 40)
-        : undefined;
+      const nearSpec =
+        !isAlly && !invisActive
+          ? this.specialists.find((s) => s.garrisonedTowerIdx < 0 && Phaser.Math.Distance.Between(rs.x, rs.y, s.x, s.y) <= 40)
+          : undefined;
+      const nearBrave =
+        !isAlly && !invisActive
+          ? this.braves.find((b) => b.fsm !== 'breeding' && Phaser.Math.Distance.Between(rs.x, rs.y, b.x, b.y) <= 40)
+          : undefined;
 
       if (isAlly) {
         // Ally Shaman actively marches and casts Lightning at hostile rivals!
@@ -2478,7 +2625,33 @@ export class PlanetScene extends Phaser.Scene {
       }
     }
 
-    // Shaman active buff aura visual
+    // Ghost Army decoys: march toward nearest enemy and absorb hits until slain or expired
+    for (let i = this.ghosts.length - 1; i >= 0; i--) {
+      const gh = this.ghosts[i];
+      gh.remaining -= dt;
+      if (gh.remaining <= 0 || gh.hp <= 0) {
+        this.spawnSparkBurst(gh.x, gh.y - 10, 0x90e0ef, 6);
+        gh.sprite.destroy();
+        this.ghosts.splice(i, 1);
+        continue;
+      }
+      const foe = this.findNearestEnemy(gh.x, gh.y, 420);
+      if (foe) {
+        const d = Phaser.Math.Distance.Between(gh.x, gh.y, foe.x, foe.y);
+        if (d > 22) {
+          const dx = (foe.x - gh.x) / d;
+          const dy = (foe.y - gh.y) / d;
+          gh.x = wrapCoord(gh.x + dx * 52 * dt, WORLD_W);
+          gh.y = wrapCoord(gh.y + dy * 52 * dt, WORLD_H);
+          gh.dir = dir8FromVec(dx, dy);
+          const rk = `warrior_blue_run_d${gh.dir}`;
+          if (this.anims.exists(rk) && gh.sprite.anims.currentAnim?.key !== rk) gh.sprite.play(rk);
+        }
+      }
+      gh.sprite.setAlpha(0.42 + 0.18 * Math.sin(this.time.now * 0.009 + i)).setPosition(gh.x, gh.y).setDepth(gh.y);
+    }
+
+    // Shaman & Follower active buff visuals (Invisibility cloaks Shaman AND all player Braves & Specialists!)
     const hasShield = (this.state.activeBuffs.shield ?? 0) > 0;
     const hasBlood = (this.state.activeBuffs.bloodlust ?? 0) > 0;
     const hasInvis = (this.state.activeBuffs.invisibility ?? 0) > 0;
@@ -2488,7 +2661,134 @@ export class PlanetScene extends Phaser.Scene {
       const col = hasShield ? 0x72efdd : hasBlood ? 0xe63946 : 0xc77dff;
       this.shamanBuffAura.setPosition(this.shaman.x, this.shaman.y - 18).setFillStyle(col, 0.16).setStrokeStyle(2, col, 0.85);
     }
-    this.shaman.setAlpha(hasInvis ? 0.5 : 1);
+    this.shaman.setAlpha(hasInvis ? 0.42 : 1);
+    if (hasInvis) this.shaman.setTint(0xb8f2e6);
+    else this.shaman.clearTint();
+
+    for (const b of this.braves) {
+      b.sprite.setAlpha(hasInvis ? 0.42 : 1);
+      if (hasInvis) b.sprite.setTint(0xb8f2e6);
+      else b.sprite.clearTint();
+    }
+    for (const s of this.specialists) {
+      s.sprite.setAlpha(hasInvis ? 0.42 : 1);
+      if (hasInvis) s.sprite.setTint(0xb8f2e6);
+      else s.sprite.clearTint();
+    }
+  }
+
+  /** Wraps every world sprite smoothly around the camera center so scrolling continuously in any direction loops seamlessly like a globe. */
+  private syncWrappedVisuals(): void {
+    const cam = this.cameras.main;
+    const cx = cam.midPoint.x;
+    const cy = cam.midPoint.y;
+
+    // Keep the 3x3 periodic terrain grid centered on the camera's current wrap tile
+    const baseX = Math.floor(cx / WORLD_W) * WORLD_W;
+    const baseY = Math.floor(cy / WORLD_H) * WORLD_H;
+    let ti = 0;
+    for (let oy = -1; oy <= 1; oy++) {
+      for (let ox = -1; ox <= 1; ox++) {
+        this.terrainImages[ti++]?.setPosition(baseX + ox * WORLD_W, baseY + oy * WORLD_H);
+      }
+    }
+
+    const wx = (x: number) => cx + wrapDelta(cx, x, WORLD_W);
+    const wy = (y: number) => cy + wrapDelta(cy, y, WORLD_H);
+
+    for (const t of this.trees) {
+      const rx = wx(t.x);
+      const ry = wy(t.y);
+      t.sprite.setPosition(rx, ry).setDepth(ry);
+    }
+    for (const ob of this.obelisks) {
+      const rx = wx(ob.x);
+      const ry = wy(ob.y);
+      ob.sprite.setPosition(rx, ry).setDepth(ry);
+      ob.aura.setPosition(rx, ry - 6);
+    }
+    for (const h of this.playerHuts) {
+      const rx = wx(h.x);
+      const ry = wy(h.y);
+      h.sprite.setPosition(rx, ry).setDepth(ry);
+      h.hpBg.setPosition(rx, ry - 60);
+      h.hpFill.setPosition(rx - 17, ry - 60);
+      h.barBg.setPosition(rx, ry - 52);
+      h.barFill.setPosition(rx - 14, ry - 52);
+    }
+    for (const tb of this.trainingBuildings) {
+      const rx = wx(tb.x);
+      const ry = wy(tb.y);
+      tb.sprite.setPosition(rx, ry).setDepth(ry);
+      tb.hpBg.setPosition(rx, ry - 66);
+      tb.hpFill.setPosition(rx - 17, ry - 66);
+      tb.barBg.setPosition(rx, ry - 58);
+      tb.barFill.setPosition(rx - 15, ry - 58);
+    }
+    for (const tw of this.towers) {
+      const rx = wx(tw.x);
+      const ry = wy(tw.y);
+      tw.sprite.setPosition(rx, ry).setDepth(ry);
+    }
+    if (this.buildSite) {
+      const rx = wx(this.buildSite.x);
+      const ry = wy(this.buildSite.y);
+      this.buildSite.sprite.setPosition(rx, ry).setDepth(ry - 1);
+      this.buildSite.barBg.setPosition(rx, ry - 44);
+      this.buildSite.barFill.setPosition(rx - 18, ry - 44);
+    }
+    for (const eh of this.enemyHuts) {
+      const rx = wx(eh.x);
+      const ry = wy(eh.y);
+      eh.sprite.setPosition(rx, ry).setDepth(ry);
+      eh.hpBg.setPosition(rx, ry - 58);
+      eh.hpFill.setPosition(rx - 17, ry - 58);
+      eh.barBg.setPosition(rx, ry - 50);
+      eh.barFill.setPosition(rx - 14, ry - 50);
+    }
+    for (const w of this.wildmen) {
+      const rx = wx(w.x);
+      const ry = wy(w.y);
+      w.sprite.setPosition(rx, ry).setDepth(ry);
+      w.barBg.setPosition(rx, ry - 40);
+      w.barFill.setPosition(rx - 13, ry - 40);
+    }
+    for (const b of this.braves) {
+      const rx = wx(b.x);
+      const ry = wy(b.y);
+      b.sprite.setPosition(rx, ry).setDepth(ry);
+      b.hpBg.setPosition(rx, ry - 42);
+      b.hpFill.setPosition(rx - 10, ry - 42);
+    }
+    for (const s of this.specialists) {
+      const rx = wx(s.x);
+      const ry = wy(s.y);
+      s.sprite.setPosition(rx, ry).setDepth(s.garrisonedTowerIdx >= 0 ? ry + 40 : ry);
+      s.hpBg.setPosition(rx, ry - 44);
+      s.hpFill.setPosition(rx - 11, ry - 44);
+    }
+    for (const gh of this.ghosts) {
+      const rx = wx(gh.x);
+      const ry = wy(gh.y);
+      gh.sprite.setPosition(rx, ry).setDepth(ry);
+    }
+    for (const e of this.enemies) {
+      const rx = wx(e.x);
+      const ry = wy(e.y);
+      e.shadow.setPosition(rx, ry).setDepth(ry - 2);
+      e.sprite.setPosition(rx, ry - e.airZ).setDepth(ry + (e.airZ > 0 ? 300 : 0));
+      e.hpBg.setPosition(rx, ry - 42);
+      e.hpFill.setPosition(rx - 10, ry - 42);
+    }
+    for (const rs of this.rivalShamans) {
+      const rx = wx(rs.x);
+      const ry = wy(rs.y);
+      rs.sprite.setPosition(rx, ry).setDepth(ry);
+      rs.ring.setPosition(rx, ry);
+      rs.label.setPosition(rx, ry - 60);
+      rs.hpBg.setPosition(rx, ry - 50);
+      rs.hpFill.setPosition(rx - 16, ry - 50);
+    }
   }
 
   update(_time: number, deltaMs: number): void {
@@ -2532,8 +2832,31 @@ export class PlanetScene extends Phaser.Scene {
         dx /= Math.max(1, len);
         dy /= Math.max(1, len);
         const speed = 135;
-        this.shaman.x = (this.shaman.x + dx * speed * dt + WORLD_W) % WORLD_W;
-        this.shaman.y = (this.shaman.y + dy * speed * dt + WORLD_H) % WORLD_H;
+        const rawX = this.shaman.x + dx * speed * dt;
+        const rawY = this.shaman.y + dy * speed * dt;
+        const nextX = wrapCoord(rawX, WORLD_W);
+        const nextY = wrapCoord(rawY, WORLD_H);
+        // Walkability check: rivers and mountains block walking until Landbridge raises a crossing!
+        const canMoveBoth = this.terrain.isWalkable(nextX, nextY);
+        const canMoveX = this.terrain.isWalkable(nextX, this.shaman.y);
+        const canMoveY = this.terrain.isWalkable(this.shaman.x, nextY);
+        const oldX = this.shaman.x;
+        const oldY = this.shaman.y;
+        if (canMoveBoth) {
+          this.shaman.x = nextX;
+          this.shaman.y = nextY;
+        } else if (canMoveX) {
+          this.shaman.x = nextX;
+        } else if (canMoveY) {
+          this.shaman.y = nextY;
+        }
+        // Shift camera scroll by exact wrap jump so crossing 0 <-> WORLD_W is 100% seamless!
+        if (Math.abs(this.shaman.x - oldX) > WORLD_W / 2) {
+          this.cameras.main.scrollX += this.shaman.x - oldX;
+        }
+        if (Math.abs(this.shaman.y - oldY) > WORLD_H / 2) {
+          this.cameras.main.scrollY += this.shaman.y - oldY;
+        }
         this.shamanDir = dir8FromVec(dx, dy);
         if (this.castAnimTimer <= 0) {
           const walkKey = `shaman_blue_walk_d${this.shamanDir}`;
@@ -2590,6 +2913,7 @@ export class PlanetScene extends Phaser.Scene {
       this.updateSpecialists(dt);
       this.updateEnemiesAndRivals(dt);
       this.updateHazardsAndObelisks(dt);
+      this.syncWrappedVisuals();
     } catch (err) {
       console.error('PlanetScene step error:', err);
     }

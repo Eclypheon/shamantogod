@@ -33,7 +33,8 @@ const hud = new HudController(
     sceneRef?.triggerOpeningConvert();
   },
   (paused) => sceneRef?.setPaused(paused),
-  (muted) => ambience.setMuted(muted)
+  (muted) => ambience.setMuted(muted),
+  (delta) => sceneRef?.adjustZoom(delta)
 );
 
 if (offline.manaGained >= 1) {
@@ -43,7 +44,8 @@ if (offline.manaGained >= 1) {
 sceneRef = new PlanetScene(
   state,
   () => hud.sync(),
-  (msg) => hud.showToast(msg)
+  (msg) => hud.showToast(msg),
+  () => ambience.playGhostChime()
 );
 
 new Phaser.Game({

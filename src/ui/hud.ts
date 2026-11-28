@@ -49,6 +49,7 @@ export class HudController {
   private onBeginPlay: () => void;
   private onSetPaused: (paused: boolean) => void;
   private onMuteChanged: (muted: boolean) => void;
+  private onZoom: (delta: number) => void;
   private deferredInstallPrompt: BeforeInstallPromptEvent | null = null;
   private installDismissed = false;
   private lastSpellSignature = '';
@@ -84,7 +85,8 @@ export class HudController {
     onResetState: (fresh: GameState) => void,
     onBeginPlay: () => void,
     onSetPaused: (paused: boolean) => void,
-    onMuteChanged: (muted: boolean) => void
+    onMuteChanged: (muted: boolean) => void,
+    onZoom: (delta: number) => void
   ) {
     this.root = root;
     this.state = state;
@@ -93,6 +95,7 @@ export class HudController {
     this.onBeginPlay = onBeginPlay;
     this.onSetPaused = onSetPaused;
     this.onMuteChanged = onMuteChanged;
+    this.onZoom = onZoom;
 
     this.mountShell();
 
@@ -157,12 +160,21 @@ export class HudController {
       <div class="drawer-backdrop" id="hud-drawer-backdrop"></div>
       <aside class="papyrus scroll-drawer" id="hud-drawer"></aside>
 
+      <div class="globe-vignette"></div>
+
+      <div class="zoom-controls" id="hud-zoom-controls">
+        <button class="btn zoom-btn" id="btn-map-zoom-in" title="Zoom In">+</button>
+        <button class="btn zoom-btn" id="btn-map-zoom-out" title="Zoom Out">-</button>
+      </div>
+
       <div class="joystick-zone" id="hud-joystick">
         <div class="joystick-knob" id="hud-joystick-knob"></div>
       </div>
 
-      <div class="papyrus spell-info" id="hud-spell-info"></div>
-      <nav class="papyrus spell-dock" id="hud-spells"></nav>
+      <div class="spell-stack">
+        <div class="papyrus spell-info" id="hud-spell-info"></div>
+        <nav class="papyrus spell-dock" id="hud-spells"></nav>
+      </div>
 
       <section class="title-screen open" id="hud-title"></section>
       <section class="pantheon-modal" id="hud-pantheon"></section>
@@ -220,9 +232,12 @@ export class HudController {
     this.elCoachArrow = this.root.querySelector('#hud-coach-arrow')!;
 
     // Prevent any HUD tap from leaking into Phaser canvas input
-    for (const sel of ['.top-ribbon', '.scroll-drawer', '.spell-dock', '.title-screen', '.pantheon-modal']) {
+    for (const sel of ['.top-ribbon', '.scroll-drawer', '.spell-dock', '.zoom-controls', '.title-screen', '.pantheon-modal']) {
       this.root.querySelector(sel)?.addEventListener('pointerdown', (e) => e.stopPropagation());
     }
+
+    this.root.querySelector('#btn-map-zoom-in')?.addEventListener('click', () => this.onZoom(0.18));
+    this.root.querySelector('#btn-map-zoom-out')?.addEventListener('click', () => this.onZoom(-0.18));
 
     this.elTabBtns.forEach((btn) => {
       btn.addEventListener('click', () => {

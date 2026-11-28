@@ -61,6 +61,27 @@ export class AncientAmbience {
     }
   }
 
+  /** Distinct ethereal spectral chime for Ghost Army (never reuses Swarm's buzz). */
+  playGhostChime(): void {
+    if (this.muted || !this.ctx || !this.master) return;
+    if (this.ctx.state === 'suspended') this.ctx.resume().catch(() => {});
+    const now = this.ctx.currentTime;
+    for (const [i, freq] of [523.25, 659.25, 783.99, 1046.5].entries()) {
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now + i * 0.06);
+      osc.frequency.exponentialRampToValueAtTime(freq * 0.94, now + i * 0.06 + 0.9);
+      g.gain.setValueAtTime(0.0001, now + i * 0.06);
+      g.gain.exponentialRampToValueAtTime(0.45, now + i * 0.06 + 0.05);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + i * 0.06 + 0.95);
+      osc.connect(g);
+      g.connect(this.master);
+      osc.start(now + i * 0.06);
+      osc.stop(now + i * 0.06 + 1.0);
+    }
+  }
+
   private schedulePluck(): void {
     const delayMs = 2600 + Math.random() * 3400;
     this.pluckTimer = window.setTimeout(() => {
