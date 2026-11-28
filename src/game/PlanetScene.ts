@@ -8,6 +8,7 @@ import {
   findNearestClusterCentroid,
   formAlliance,
   getCastRangePx,
+  getEnemyScaling,
   getMaxHutsForPop,
   getPlanetConfig,
   getPopCap,
@@ -34,13 +35,17 @@ import {
   type GameState,
 } from './state';
 import {
+  createAngelOfDeathVfx,
   createHazardVfx,
+  playDragonFireBreathVfx,
   playEarthquakeVfx,
   playFirestormVfx,
   playHypnotiseVfx,
   playLightningVfx,
   playTeleportVfx,
+  playWaterSplashVfx,
   type ActiveHazard,
+  type AngelOfDeathActor,
 } from './spellVfx';
 import { PlanetTerrain, WORLD_H, WORLD_W, wrapCoord, wrapDelta, wrapDist } from './terrain';
 
@@ -290,6 +295,7 @@ export class PlanetScene extends Phaser.Scene {
   private obelisks: ObeliskNode[] = [];
   private hazards: ActiveHazard[] = [];
   private ghosts: GhostActor[] = [];
+  private angels: AngelOfDeathActor[] = [];
   private shamanBuffAura!: Phaser.GameObjects.Arc;
   private playerHuts: PlayerHutNode[] = [];
   private towers: { x: number; y: number; sprite: Phaser.GameObjects.Sprite }[] = [];
@@ -502,6 +508,11 @@ export class PlanetScene extends Phaser.Scene {
     this.hazards = [];
     for (const gh of this.ghosts) gh.sprite.destroy();
     this.ghosts = [];
+    for (const ang of this.angels) {
+      ang.container.destroy();
+      ang.shadow.destroy();
+    }
+    this.angels = [];
     for (const h of this.playerHuts) {
       h.sprite.destroy();
       h.hpBg.destroy();
@@ -619,27 +630,40 @@ export class PlanetScene extends Phaser.Scene {
 
     this.syncBuiltStructures();
 
-    // Rival huts with HP bars when damaged
-    const enemyHutCount = Math.min(10, p.enemyHutsRemaining);
+    const scaling = getEnemyScaling(cfg.id);
+    const rivalHubs: [number, number][] =
+      cfg.id === 1
+        ? [[WORLD_W / 2 + 430, WORLD_H / 2]]
+        : [
+            [WORLD_W / 2 + 560, WORLD_H / 2 - 140],
+            [WORLD_W / 2 - 560, WORLD_H / 2 + 120],
+            [WORLD_W / 2 + 120, WORLD_H / 2 + 370],
+          ];
+
+    // Rival huts spread wide around each rival tribe's distant continent (scaled durability for incremental curve!)
+    const enemyHutCount = Math.min(14, p.enemyHutsRemaining);
+    const baseHutHp = Math.round(120 * scaling.hutHpMult);
     for (let i = 0; i < enemyHutCount; i++) {
-      const tribe = cfg.rivals[i % cfg.rivals.length];
-      const angle = -0.9 + (i / Math.max(1, enemyHutCount)) * 1.8 + (i % 2 === 0 ? 0 : Math.PI);
-      const bx = WORLD_W / 2 + Math.cos(angle) * 440;
-      const by = WORLD_H / 2 + Math.sin(angle) * 240;
+      const rIdx = i % cfg.rivals.length;
+      const tribe = cfg.rivals[rIdx];
+      const [hubX, hubY] = rivalHubs[rIdx % rivalHubs.length];
+      const spreadAng = (Math.floor(i / cfg.rivals.length) / Math.max(1, Math.ceil(enemyHutCount / cfg.rivals.length))) * Math.PI * 2 + rIdx * 0.7;
+      const spreadR = 72 + (i % 3) * 38;
+      const bx = wrapCoord(hubX + Math.cos(spreadAng) * spreadR, WORLD_W);
+      const by = wrapCoord(hubY + Math.sin(spreadAng) * spreadR * 0.78, WORLD_H);
       const sp = this.add.sprite(bx, by, 'world', `hut_2_${tribe}`).setOrigin(0.5, 0.92).setDepth(by);
       const hpBg = this.add.rectangle(bx, by - 58, 36, 5, 0x1a120a, 0.85).setVisible(false).setDepth(928);
       const hpFill = this.add.rectangle(bx - 17, by - 58, 34, 3, 0xe63946, 1).setOrigin(0, 0.5).setVisible(false).setDepth(929);
       const barBg = this.add.rectangle(bx, by - 50, 30, 4, 0x1a120a, 0.85).setVisible(false).setDepth(920);
       const barFill = this.add.rectangle(bx - 14, by - 50, 0, 2, 0xf4c95d, 1).setOrigin(0, 0.5).setVisible(false).setDepth(921);
-      this.enemyHuts.push({ sprite: sp, hpBg, hpFill, barBg, barFill, isTrainingHut: false, occupant: null, trainTimer: 0, x: bx, y: by, hp: 120, maxHp: 120, tribe });
+      this.enemyHuts.push({ sprite: sp, hpBg, hpFill, barBg, barFill, isTrainingHut: false, occupant: null, trainTimer: 0, x: bx, y: by, hp: baseHutHp, maxHp: baseHutHp, tribe });
     }
 
-    // 1 Rival Shaman per rival tribe (can fight, die, and reincarnate!)
+    // 1 Rival Shaman per rival tribe at their distant hub (resilience scales with planet tier)
+    const rivalShamanMaxHp = Math.round(180 * scaling.hpMult);
     cfg.rivals.forEach((tribe, idx) => {
       const isAlly = p.allied && cfg.allianceTribe === tribe;
-      const angle = idx === 0 ? 0 : idx === 1 ? Math.PI : Math.PI / 2;
-      const sx = WORLD_W / 2 + Math.cos(angle) * 390;
-      const sy = WORLD_H / 2 + Math.sin(angle) * 210;
+      const [sx, sy] = rivalHubs[idx % rivalHubs.length];
       const ringColor = isAlly ? 0x52b788 : tribe === 'red' ? 0xe63946 : tribe === 'green' ? 0x2ec4b6 : 0xf4c95d;
       const ring = this.add.circle(sx, sy, 26, ringColor, 0.14).setStrokeStyle(2, ringColor, 0.85).setDepth(4);
       const sp = this.add.sprite(sx, sy, 'units', `shaman_${tribe}_stand_d1_00`).setOrigin(0.5, 1).setScale(1.32).setDepth(sy);
@@ -665,8 +689,8 @@ export class PlanetScene extends Phaser.Scene {
         homeY: sy,
         x: sx,
         y: sy,
-        hp: 180,
-        maxHp: 180,
+        hp: rivalShamanMaxHp,
+        maxHp: rivalShamanMaxHp,
         respawnTimer: 0,
         attackTimer: 0,
         targetX: sx,
@@ -686,20 +710,20 @@ export class PlanetScene extends Phaser.Scene {
     // Existing loyal units
     this.syncUnitActors();
 
-    // Enemy Braves around rival territories (they train for 5s into Enemy Warriors, faster on later planets)
+    // Enemy Braves & Warriors around each spread-out rival continent (more chaotic on later worlds!)
+    const trainHutHp = Math.round(150 * scaling.hutHpMult);
+    const unitsPerRival = cfg.id === 1 ? 3 : Math.min(7, 4 + Math.floor(cfg.id / 3));
     cfg.rivals.forEach((tribe, idx) => {
-      const angle = idx === 0 ? 0 : idx === 1 ? Math.PI : Math.PI / 2;
-      const cx = WORLD_W / 2 + Math.cos(angle) * 370;
-      const cy = WORLD_H / 2 + Math.sin(angle) * 195;
-      // Rival Warrior Training Hut at their base (enemy Braves physically enter & queue here)
+      const [cx, cy] = rivalHubs[idx % rivalHubs.length];
       const ehSp = this.add.sprite(cx + 36, cy - 28, 'world', `warrior_hut_${tribe}`).setOrigin(0.5, 0.92).setDepth(cy - 28);
       const hpBg = this.add.rectangle(cx + 36, cy - 86, 36, 5, 0x1a120a, 0.85).setVisible(false).setDepth(928);
       const hpFill = this.add.rectangle(cx + 19, cy - 86, 34, 3, 0xe63946, 1).setOrigin(0, 0.5).setVisible(false).setDepth(929);
       const barBg = this.add.rectangle(cx + 36, cy - 78, 30, 4, 0x1a120a, 0.85).setVisible(false).setDepth(920);
       const barFill = this.add.rectangle(cx + 22, cy - 78, 0, 2, 0xf4c95d, 1).setOrigin(0, 0.5).setVisible(false).setDepth(921);
-      this.enemyHuts.push({ sprite: ehSp, hpBg, hpFill, barBg, barFill, isTrainingHut: true, occupant: null, trainTimer: 0, x: cx + 36, y: cy - 28, hp: 140, maxHp: 140, tribe });
-      for (let i = 0; i < 4; i++) {
-        this.spawnEnemy(tribe, cx + Phaser.Math.Between(-65, 65), cy + Phaser.Math.Between(-50, 50), i === 0 ? 'warrior' : 'brave', cx + 36, cy - 10);
+      this.enemyHuts.push({ sprite: ehSp, hpBg, hpFill, barBg, barFill, isTrainingHut: true, occupant: null, trainTimer: 0, x: cx + 36, y: cy - 28, hp: trainHutHp, maxHp: trainHutHp, tribe });
+      for (let i = 0; i < unitsPerRival; i++) {
+        const startRole = i < Math.ceil(unitsPerRival / 2) ? 'warrior' : 'brave';
+        this.spawnEnemy(tribe, wrapCoord(cx + Phaser.Math.Between(-85, 85), WORLD_W), wrapCoord(cy + Phaser.Math.Between(-65, 65), WORLD_H), startRole, cx + 36, cy - 10);
       }
     });
 
@@ -1003,8 +1027,9 @@ export class PlanetScene extends Phaser.Scene {
     if (this.anims.exists(animKey)) sp.play(animKey);
     const hpBg = this.add.rectangle(x, y - 42, 22, 3, 0x1a120a, 0.85).setVisible(false).setDepth(925);
     const hpFill = this.add.rectangle(x - 10, y - 42, 20, 2, 0xe63946, 1).setOrigin(0, 0.5).setVisible(false).setDepth(926);
-    const maxHp = role === 'warrior' ? 110 : 35;
-    const trainSec = Math.max(2.4, 5.0 - (this.state.activePlanetId - 1) * 0.18);
+    const scaling = getEnemyScaling(this.state.activePlanetId);
+    const maxHp = Math.round((role === 'warrior' ? 110 : 35) * scaling.hpMult);
+    const trainSec = Math.max(2.0, 5.0 - (this.state.activePlanetId - 1) * 0.2);
     this.enemies.push({
       sprite: sp,
       shadow,
@@ -1242,17 +1267,20 @@ export class PlanetScene extends Phaser.Scene {
       playTeleportVfx(this, oldX, oldY, nx, ny);
       this.spawnFloatingText(nx, ny, 'Teleport', '#90e0ef');
     } else if (spell.id === 'flatten') {
-      this.terrain.flattenArea(wx, wy, spell.radius);
+      const fRes = this.terrain.flattenArea(wx, wy, spell.radius);
       this.redrawTerrain();
-      if (this.buildSite && this.buildSite.needsStomp && wrapDist(wx, wy, this.buildSite.x, this.buildSite.y) <= spell.radius) {
+      if (this.buildSite && this.buildSite.needsStomp && fRes.targetH >= 0 && fRes.targetH < 0.34 && wrapDist(wx, wy, this.buildSite.x, this.buildSite.y) <= spell.radius) {
         this.buildSite.needsStomp = false;
         this.buildSite.stompProgress = 1;
         this.buildSite.barFill.setFillStyle(0xe9c46a, 1).setSize(0, 3);
       }
-      this.spawnSparkBurst(wx, wy, 0xd4a373, 14);
-      const wave = this.add.circle(wx, wy, 16, 0xd4a373, 0.28).setStrokeStyle(3, 0xe9c46a, 0.9).setDepth(900);
+      const waveColor = fRes.targetH < 0 ? 0x48cae4 : fRes.targetH >= 1.18 ? 0xb7a99a : 0xd4a373;
+      this.spawnSparkBurst(wx, wy, waveColor, 14);
+      const wave = this.add.circle(wx, wy, 16, waveColor, 0.28).setStrokeStyle(3, 0xe9c46a, 0.9).setDepth(900);
       this.tweens.add({ targets: wave, radius: spell.radius, alpha: 0, duration: 480, onComplete: () => wave.destroy() });
-      this.spawnFloatingText(wx, wy, 'Ground Flattened!', '#e9c46a');
+      const msg = fRes.targetH < 0 ? 'Land Flooded!' : fRes.targetH >= 1.18 ? 'Plateau Raised!' : 'Ground Flattened!';
+      this.spawnFloatingText(wx, wy, msg, fRes.targetH < 0 ? '#90e0ef' : '#e9c46a');
+      this.checkWaterDrowning();
     } else if (spell.id === 'landbridge') {
       const bridged = this.terrain.raiseLandbridge(this.shaman.x, this.shaman.y, wx, wy, 32);
       this.redrawTerrain();
@@ -1270,6 +1298,7 @@ export class PlanetScene extends Phaser.Scene {
       playEarthquakeVfx(this, wx, wy, spell.radius);
       this.applyAreaSpellDamage(wx, wy, spell.radius, 65, 115);
       this.spawnFloatingText(wx, wy, sunk > 0 ? 'Land Eroded!' : 'Erode!', '#72efdd');
+      this.checkWaterDrowning();
     } else if (spell.id === 'ghost_army') {
       // Summon 4 spectral Ghost Warrior decoys that march forward and absorb enemy attacks!
       for (let i = 0; i < 4; i++) {
@@ -1316,18 +1345,10 @@ export class PlanetScene extends Phaser.Scene {
       }
       this.spawnFloatingText(wx, wy, conv > 0 ? `Hypnotised +${conv}!` : 'Hypnotise', '#e0aaff');
     } else if (spell.id === 'angel') {
-      // Spectral hunter strikes up to 5 enemies across the map
-      const targets = this.enemies.filter((e) => !e.dead && !isTribeAllied(this.state, this.state.activePlanetId, e.tribe)).slice(0, 5);
-      targets.forEach((t, idx) => {
-        this.time.delayedCall(idx * 240, () => {
-          if (!t.dead) {
-            playLightningVfx(this, t.x, t.y);
-            t.hp -= 120 * getSpellPowerMult(this.state);
-            if (t.hp <= 0) this.killEnemy(t);
-          }
-        });
-      });
-      this.spawnFloatingText(wx, wy, 'Angel of Death!', '#f4c95d');
+      // Summon a flying, fire-breathing winged serpentine Angel of Death!
+      this.angels.push(createAngelOfDeathVfx(this, wx, wy));
+      this.cameras.main.shake(180, 0.006);
+      this.spawnFloatingText(wx, wy, 'Angel of Death!', '#ff9f1c');
     } else if (spell.id === 'armageddon') {
       this.cameras.main.shake(420, 0.014);
       const targets = this.enemies.filter((e) => !e.dead && !isTribeAllied(this.state, this.state.activePlanetId, e.tribe)).slice(0, 8);
@@ -2194,7 +2215,9 @@ export class PlanetScene extends Phaser.Scene {
     const cfg = getPlanetConfig(p.planetId);
 
     // Enemy Warrior Hut physical training timers (enemy Brave stays inside, pops out as Warrior!)
-    const trainTotal = Math.max(2.4, 5.0 - (cfg.id - 1) * 0.18);
+    const scaling = getEnemyScaling(cfg.id);
+    const trainTotal = Math.max(2.0, 5.0 - (cfg.id - 1) * 0.2);
+    const trainedWarHp = Math.round(110 * scaling.hpMult);
     for (const eh of this.enemyHuts) {
       if (eh.isTrainingHut && eh.occupant) {
         eh.trainTimer -= dt;
@@ -2207,8 +2230,8 @@ export class PlanetScene extends Phaser.Scene {
           eh.barFill.setVisible(false);
           occ.insideTraining = false;
           occ.role = 'warrior';
-          occ.hp = 110;
-          occ.maxHp = 110;
+          occ.hp = trainedWarHp;
+          occ.maxHp = trainedWarHp;
           occ.x = eh.x;
           occ.y = eh.y + 20;
           occ.sprite.setVisible(true);
@@ -2222,20 +2245,19 @@ export class PlanetScene extends Phaser.Scene {
       }
     }
 
-    // Periodic enemy raids & reinforcements once player has built at least 1 Hut
+    // Periodic enemy raids & reinforcements scaled by planet tier
     if (p.hutsBuilt >= 1) {
       const hostileHuts = this.enemyHuts.filter((h) => h.hp > 0 && !isTribeAllied(this.state, p.planetId, h.tribe));
       if (hostileHuts.length > 0) {
         this.enemyRaidTimer -= dt;
         if (this.enemyRaidTimer <= 0) {
-          this.enemyRaidTimer = cfg.id === 1 ? 22 : Math.max(9, 18 - cfg.id * 0.6);
+          this.enemyRaidTimer = scaling.raidIntervalSec;
           const aliveHostile = this.enemies.filter((e) => !e.dead && !e.insideTraining && !isTribeAllied(this.state, p.planetId, e.tribe));
-          const maxHostile = cfg.id === 1 ? 5 : Math.min(10, 5 + Math.floor(cfg.id / 2));
-          if (aliveHostile.length < maxHostile) {
+          if (aliveHostile.length < scaling.maxHostile) {
             const eh = hostileHuts[Phaser.Math.Between(0, hostileHuts.length - 1)];
             this.spawnEnemy(eh.tribe, eh.x, eh.y + 18, 'brave', eh.x, eh.y + 18);
           }
-          const raiders = aliveHostile.filter((e) => e.role === 'warrior').slice(0, cfg.id === 1 ? 2 : 3);
+          const raiders = aliveHostile.filter((e) => e.role === 'warrior').slice(0, cfg.id === 1 ? 2 : Math.min(5, 2 + Math.floor(cfg.id / 3)));
           if (raiders.length > 0) {
             for (const e of raiders) {
               e.targetX = WORLD_W / 2 + Phaser.Math.Between(-95, 95);
@@ -2254,8 +2276,8 @@ export class PlanetScene extends Phaser.Scene {
       }
 
       if (e.airZ > 0 || e.vz !== 0) {
-        e.x = Phaser.Math.Clamp(e.x + e.knockVx * dt, 100, WORLD_W - 100);
-        e.y = Phaser.Math.Clamp(e.y + e.knockVy * dt, 100, WORLD_H - 100);
+        e.x = wrapCoord(e.x + e.knockVx * dt, WORLD_W);
+        e.y = wrapCoord(e.y + e.knockVy * dt, WORLD_H);
         e.airZ += e.vz * dt;
         e.vz -= 540 * dt;
         if (e.airZ <= 0) {
@@ -2263,6 +2285,14 @@ export class PlanetScene extends Phaser.Scene {
           e.vz = 0;
           e.knockVx = 0;
           e.knockVy = 0;
+          // Drown immediately if Blast knocked them into water!
+          if (this.terrain.isWater(e.x, e.y)) {
+            playWaterSplashVfx(this, e.x, e.y);
+            this.spawnFloatingText(e.x, e.y, 'Drowned!', '#90e0ef');
+            this.killEnemy(e);
+            this.enemies.splice(i, 1);
+            continue;
+          }
           // Only die on landing if HP actually reached 0 (Warriors survive a single Blast!)
           if (e.hp <= 0) {
             this.killEnemy(e);
@@ -2386,19 +2416,20 @@ export class PlanetScene extends Phaser.Scene {
           if (this.anims.exists(pk) && e.sprite.anims.currentAnim?.key !== pk) e.sprite.play(pk);
           if (e.attackTimer <= 0) {
             e.attackTimer = 1.1;
+            const enemyDmg = Math.round(11 * scaling.dmgMult);
             if (nearGhost) {
-              nearGhost.hp -= 14;
+              nearGhost.hp -= enemyDmg;
             } else if ((this.state.activeBuffs.shield ?? 0) <= 0) {
               if (nearShaman) {
-                this.damagePlayerShaman(11);
+                this.damagePlayerShaman(enemyDmg);
               } else if (nearWarrior) {
-                nearWarrior.hp -= 11;
+                nearWarrior.hp -= enemyDmg;
                 if (nearWarrior.hp <= 0) this.killPlayerSpecialist(nearWarrior);
               } else if (nearBrave) {
-                nearBrave.hp -= 11;
+                nearBrave.hp -= enemyDmg;
                 if (nearBrave.hp <= 0) this.killPlayerBrave(nearBrave);
               } else if (nearHut) {
-                nearHut.hp = Math.max(10, nearHut.hp - 10);
+                nearHut.hp = Math.max(10, nearHut.hp - enemyDmg);
               }
             }
           }
@@ -2786,6 +2817,96 @@ export class PlanetScene extends Phaser.Scene {
     }
   }
 
+  /** Drowns any ground unit standing in water (from Blast knockback, Erode, or water-Flatten). */
+  private checkWaterDrowning(): void {
+    for (let i = this.enemies.length - 1; i >= 0; i--) {
+      const e = this.enemies[i];
+      if (!e.dead && !e.insideTraining && e.airZ === 0 && this.terrain.isWater(e.x, e.y)) {
+        playWaterSplashVfx(this, e.x, e.y);
+        this.spawnFloatingText(e.x, e.y, 'Drowned!', '#90e0ef');
+        this.killEnemy(e);
+        this.enemies.splice(i, 1);
+      }
+    }
+    for (let i = this.braves.length - 1; i >= 0; i--) {
+      const b = this.braves[i];
+      if (b.fsm !== 'breeding' && b.fsm !== 'training' && this.terrain.isWater(b.x, b.y)) {
+        playWaterSplashVfx(this, b.x, b.y);
+        this.spawnFloatingText(b.x, b.y, 'Drowned!', '#90e0ef');
+        this.killPlayerBrave(b);
+      }
+    }
+    for (let i = this.specialists.length - 1; i >= 0; i--) {
+      const s = this.specialists[i];
+      if (s.garrisonedTowerIdx < 0 && this.terrain.isWater(s.x, s.y)) {
+        playWaterSplashVfx(this, s.x, s.y);
+        this.spawnFloatingText(s.x, s.y, 'Drowned!', '#90e0ef');
+        this.killPlayerSpecialist(s);
+      }
+    }
+    if (this.shamanRespawnTimer <= 0 && this.terrain.isWater(this.shaman.x, this.shaman.y)) {
+      playWaterSplashVfx(this, this.shaman.x, this.shaman.y);
+      this.damagePlayerShaman(9999);
+    }
+  }
+
+  /** Updates flying, fire-breathing winged Angel of Death dragons! */
+  private updateAngels(dt: number): void {
+    const powerMult = getSpellPowerMult(this.state);
+    const siegeMult = 1 + this.state.metaLevels.cataclysmMastery * 0.25;
+    for (let i = this.angels.length - 1; i >= 0; i--) {
+      const ang = this.angels[i];
+      ang.remaining -= dt;
+      ang.phase += dt * 11;
+      ang.breathTimer -= dt;
+      if (ang.remaining <= 0) {
+        this.spawnSparkBurst(ang.x, ang.y - 45, 0xff5400, 14);
+        ang.container.destroy();
+        ang.shadow.destroy();
+        this.angels.splice(i, 1);
+        continue;
+      }
+
+      // Flap leathery wings dramatically
+      const flap = 0.52 + 0.55 * Math.sin(ang.phase);
+      ang.leftWing.setScale(1, flap);
+      ang.rightWing.setScale(1, flap);
+
+      // Steer across the globe toward nearest hostile enemy or rival hut
+      const foe = this.findNearestEnemy(ang.x, ang.y, 1200);
+      const foeHut = !foe ? this.findNearestEnemyHut(ang.x, ang.y, 1400) : null;
+      const foeShaman = !foe && !foeHut ? this.findNearestHostileShaman(ang.x, ang.y, 1200) : null;
+      const target = foe
+        ? { x: foe.x, y: foe.y }
+        : foeHut
+          ? { x: foeHut.x, y: foeHut.y }
+          : foeShaman
+            ? { x: foeShaman.x, y: foeShaman.y }
+            : null;
+
+      if (target) {
+        const dx = wrapDelta(ang.x, target.x, WORLD_W);
+        const dy = wrapDelta(ang.y, target.y, WORLD_H);
+        const dist = Math.max(1, Math.hypot(dx, dy));
+        const desiredVx = (dx / dist) * 145;
+        const desiredVy = (dy / dist) * 145;
+        ang.vx += (desiredVx - ang.vx) * Math.min(1, dt * 3.2);
+        ang.vy += (desiredVy - ang.vy) * Math.min(1, dt * 3.2);
+
+        if (dist <= 135 && ang.breathTimer <= 0) {
+          ang.breathTimer = 1.35;
+          this.playSfx('fire', 0.3);
+          playDragonFireBreathVfx(this, ang.container.x, ang.container.y, target.x, target.y);
+          this.applyAreaSpellDamage(target.x, target.y, 78, Math.round(95 * powerMult), Math.round(85 * powerMult * siegeMult));
+        }
+      }
+
+      ang.x = wrapCoord(ang.x + ang.vx * dt, WORLD_W);
+      ang.y = wrapCoord(ang.y + ang.vy * dt, WORLD_H);
+      ang.container.setRotation(Math.atan2(ang.vy, ang.vx));
+    }
+  }
+
   /** Wraps every world sprite smoothly around the camera center so scrolling continuously in any direction loops seamlessly like a globe. */
   private syncWrappedVisuals(): void {
     const cam = this.cameras.main;
@@ -2880,6 +3001,12 @@ export class PlanetScene extends Phaser.Scene {
       const rx = wx(gh.x);
       const ry = wy(gh.y);
       gh.sprite.setPosition(rx, ry).setDepth(ry);
+    }
+    for (const ang of this.angels) {
+      const rx = wx(ang.x);
+      const ry = wy(ang.y);
+      ang.shadow.setPosition(rx, ry + 8).setDepth(ry - 4);
+      ang.container.setPosition(rx, ry - 58 + Math.sin(ang.phase * 0.5) * 6).setDepth(965);
     }
     for (const e of this.enemies) {
       const rx = wx(e.x);
@@ -3022,6 +3149,7 @@ export class PlanetScene extends Phaser.Scene {
       this.updateSpecialists(dt);
       this.updateEnemiesAndRivals(dt);
       this.updateHazardsAndObelisks(dt);
+      this.updateAngels(dt);
       this.updateAutomation(dt);
       this.syncWrappedVisuals();
     } catch (err) {

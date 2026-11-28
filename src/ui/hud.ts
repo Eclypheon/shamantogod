@@ -55,6 +55,7 @@ export class HudController {
   private deferredInstallPrompt: BeforeInstallPromptEvent | null = null;
   private installDismissed = false;
   private lastSpellSignature = '';
+  private spellCategory: 'war' | 'land' | 'bless' = 'war';
 
   // Persistent HUD DOM references
   private elPlanetTitle!: HTMLElement;
@@ -69,6 +70,7 @@ export class HudController {
   private elAutoBtn!: HTMLButtonElement;
   private elAscendBtn!: HTMLButtonElement;
   private elTabBtns!: NodeListOf<HTMLButtonElement>;
+  private elSpellCats!: HTMLElement;
   private elSpellInfo!: HTMLElement;
   private elSpellDock!: HTMLElement;
   private elDrawerBackdrop!: HTMLElement;
@@ -137,7 +139,6 @@ export class HudController {
           <span class="planet-title" id="hud-planet"></span>
           <div class="dom-track" title="Dominance"><div class="dom-fill" id="hud-dom-fill"></div></div>
           <span class="metric"><strong id="hud-dom">0%</strong></span>
-          <span id="hud-buffs" style="display:flex;gap:3px;"></span>
         </div>
         <div class="ribbon-center">
           <span class="metric">Mana <strong id="hud-mana">0</strong><span class="sub" id="hud-rate">(+0/s)</span></span>
@@ -158,6 +159,7 @@ export class HudController {
         </div>
       </header>
 
+      <div class="buffs-float" id="hud-buffs"></div>
       <div class="papyrus toast" id="hud-toast"></div>
       <div class="papyrus install-banner" id="hud-install"></div>
 
@@ -176,7 +178,14 @@ export class HudController {
       </div>
 
       <div class="spell-stack">
-        <div class="papyrus spell-info" id="hud-spell-info"></div>
+        <div class="spell-header-row">
+          <div class="spell-cats" id="hud-spell-cats">
+            <button class="spell-cat-btn active" data-scat="war">War</button>
+            <button class="spell-cat-btn" data-scat="land">Land</button>
+            <button class="spell-cat-btn" data-scat="bless">Bless</button>
+          </div>
+          <div class="papyrus spell-info" id="hud-spell-info"></div>
+        </div>
         <nav class="papyrus spell-dock" id="hud-spells"></nav>
       </div>
 
@@ -204,8 +213,18 @@ export class HudController {
     this.elAutoBtn = this.root.querySelector('#hud-auto-toggle')!;
     this.elAscendBtn = this.root.querySelector('#hud-ascend')!;
     this.elTabBtns = this.root.querySelectorAll('[data-tab]');
+    this.elSpellCats = this.root.querySelector('#hud-spell-cats')!;
     this.elSpellInfo = this.root.querySelector('#hud-spell-info')!;
     this.elSpellDock = this.root.querySelector('#hud-spells')!;
+
+    this.elSpellCats.querySelectorAll<HTMLButtonElement>('[data-scat]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.spellCategory = btn.dataset.scat as 'war' | 'land' | 'bless';
+        this.lastSpellSignature = '';
+        this.syncSpells();
+      });
+    });
     this.elDrawerBackdrop = this.root.querySelector('#hud-drawer-backdrop')!;
     this.elDrawer = this.root.querySelector('#hud-drawer')!;
 
@@ -237,7 +256,7 @@ export class HudController {
     this.elCoachArrow = this.root.querySelector('#hud-coach-arrow')!;
 
     // Prevent any HUD tap from leaking into Phaser canvas input
-    for (const sel of ['.top-ribbon', '.scroll-drawer', '.spell-dock', '.zoom-controls', '.title-screen', '.pantheon-modal']) {
+    for (const sel of ['.top-ribbon', '.scroll-drawer', '.spell-dock', '.spell-cats', '.zoom-controls', '.title-screen', '.pantheon-modal']) {
       this.root.querySelector(sel)?.addEventListener('pointerdown', (e) => e.stopPropagation());
     }
 
@@ -839,12 +858,26 @@ export class HudController {
     this.elDrawerBackdrop.classList.toggle('open', isOpen);
   }
 
+  private spellBelongsToCat(s: (typeof SPELLS)[number], cat: 'war' | 'land' | 'bless'): boolean {
+    if (cat === 'land') return s.kind === 'terrain';
+    if (cat === 'bless') return s.kind === 'convert' || s.kind === 'buff' || s.kind === 'teleport' || s.id === 'ghost_army';
+    return s.kind === 'damage' || s.id === 'angel';
+  }
+
   private syncSpells(): void {
     const unlocked = SPELLS.filter((s) => isSpellUnlocked(this.state, s));
-    const sig = unlocked.map((s) => s.id).join(',');
+    const useTabs = unlocked.length > 7;
+    this.elSpellCats.classList.toggle('visible', useTabs);
+    if (useTabs) {
+      this.elSpellCats.querySelectorAll<HTMLButtonElement>('[data-scat]').forEach((b) => {
+        b.classList.toggle('active', b.dataset.scat === this.spellCategory);
+      });
+    }
+    const visible = useTabs ? unlocked.filter((s) => this.spellBelongsToCat(s, this.spellCategory)) : unlocked;
+    const sig = `${useTabs ? this.spellCategory : 'all'}:${visible.map((s) => s.id).join(',')}`;
     if (sig !== this.lastSpellSignature) {
       this.lastSpellSignature = sig;
-      this.elSpellDock.innerHTML = unlocked
+      this.elSpellDock.innerHTML = visible
         .map(
           (s) =>
             `<button class="spell-tablet" data-spell="${s.id}" title="${s.description}">
@@ -870,7 +903,7 @@ export class HudController {
       });
     }
 
-    for (const s of unlocked) {
+    for (const s of visible) {
       const btn = this.elSpellDock.querySelector<HTMLButtonElement>(`[data-spell="${s.id}"]`);
       const costEl = this.elSpellDock.querySelector<HTMLElement>(`[data-cost="${s.id}"]`);
       if (!btn || !costEl) continue;

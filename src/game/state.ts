@@ -682,6 +682,24 @@ export function isCampaignWon(state: GameState): boolean {
   return PLANETS.every((cfg) => state.planets[cfg.id]?.conquered);
 }
 
+/** Exponential incremental difficulty curve so later worlds require Pantheon investment instead of instant steamrolling. */
+export function getEnemyScaling(planetId: number): {
+  hpMult: number;
+  hutHpMult: number;
+  dmgMult: number;
+  maxHostile: number;
+  raidIntervalSec: number;
+} {
+  const n = Math.max(0, planetId - 1);
+  return {
+    hpMult: Math.round(Math.pow(1.24, n) * 100) / 100,
+    hutHpMult: Math.round(Math.pow(1.28, n) * 100) / 100,
+    dmgMult: Math.round(Math.pow(1.16, n) * 100) / 100,
+    maxHostile: Math.min(18, 5 + Math.floor(planetId * 0.9)),
+    raidIntervalSec: planetId === 1 ? 24 : Math.max(6.5, 20 - planetId * 0.95),
+  };
+}
+
 /** Returns true if the given spell's Pantheon auto-cast unlock is owned (terrain & teleport spells are never automated). */
 export function isSpellAutoCastUnlocked(state: GameState, spellId: string): boolean {
   const m = state.metaLevels;

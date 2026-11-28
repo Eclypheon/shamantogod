@@ -144,16 +144,17 @@ export class PlanetTerrain {
           h = Math.max(0.44, Math.min(0.72, h < 0.42 ? 0.48 + 0.14 * Math.sin(u * 6 + v * 5) : h));
         }
 
-        // Keep rival village hubs on solid land
+        // Keep rival village hubs on solid land (spread wide across the globe, especially on later planets!)
         const rivalHubs = [
-          [WORLD_W / 2 + 390, WORLD_H / 2],
-          [WORLD_W / 2 - 390, WORLD_H / 2],
-          [WORLD_W / 2, WORLD_H / 2 + 210],
+          [WORLD_W / 2 + 560, WORLD_H / 2 - 140],
+          [WORLD_W / 2 - 560, WORLD_H / 2 + 120],
+          [WORLD_W / 2 + 120, WORLD_H / 2 + 370],
+          [WORLD_W / 2 - 180, WORLD_H / 2 - 360],
         ];
         for (const [rx, ry] of rivalHubs) {
           const dRival = wrapDist(wx, wy, rx, ry);
-          if (dRival < 95) {
-            h = Math.max(0.28, Math.min(0.65, h));
+          if (dRival < 115) {
+            h = Math.max(0.26, Math.min(0.65, h));
           }
         }
 
@@ -162,8 +163,12 @@ export class PlanetTerrain {
     }
   }
 
-  /** Flatten spell: levels hills/undulating ground in radius to buildable flat meadow. */
-  flattenArea(cx: number, cy: number, radius: number): number {
+  /**
+   * True Populous Flatten: samples the altitude at (cx, cy) and levels surrounding cells in radius to that SAME altitude.
+   * Cast in water -> turns surrounding land into water. Cast on mountain -> raises surrounding land to mountain height.
+   */
+  flattenArea(cx: number, cy: number, radius: number, explicitTargetH?: number): { changed: number; targetH: number } {
+    const targetH = explicitTargetH ?? this.getHeight(cx, cy);
     let changed = 0;
     const cellsR = Math.ceil(radius / CELL_SIZE) + 1;
     const center = this.cellAt(cx, cy);
@@ -175,19 +180,17 @@ export class PlanetTerrain {
         const wy = (r + 0.5) * CELL_SIZE;
         if (wrapDist(cx, cy, wx, wy) <= radius) {
           const idx = this.idx(c, r);
-          if (this.heights[idx] >= -0.05) {
-            if (Math.abs(this.heights[idx] - 0.16) > 0.08) changed++;
-            this.heights[idx] = 0.16;
-          }
+          if (Math.abs(this.heights[idx] - targetH) > 0.06) changed++;
+          this.heights[idx] = targetH;
         }
       }
     }
-    return changed;
+    return { changed, targetH };
   }
 
-  /** Brave stomping: flattens a small 3x3 build footprint. */
+  /** Brave stomping: flattens a small 3x3 build footprint to flat buildable meadow. */
   stompFootprint(cx: number, cy: number): void {
-    this.flattenArea(cx, cy, 32);
+    this.flattenArea(cx, cy, 32, 0.16);
   }
 
   /** Landbridge spell: raises a walkable earthen bridge strip from (x1,y1) to (x2,y2) across rivers/water. */
@@ -263,10 +266,10 @@ export class PlanetTerrain {
     return top + (bot - top) * ty;
   }
 
-  /** Renders smooth, hill-shaded 2.5D terrain, coastlines, undulating hills, flat meadows, and mountains onto a Canvas 2D context. */
+  /** Renders high-res (800x500) crisp textured terrain, water ripples, sandy shores, hill-shaded grass, and mountain crags. */
   renderToCanvas(ctx: CanvasRenderingContext2D, groundColor: number, waterColor: number): void {
-    const rw = 400;
-    const rh = 250;
+    const rw = 800;
+    const rh = 500;
     const off = document.createElement('canvas');
     off.width = rw;
     off.height = rh;
@@ -284,59 +287,70 @@ export class PlanetTerrain {
       for (let x = 0; x < rw; x++) {
         const wx = (x + 0.5) * stepX;
         const h = this.sampleSmooth(wx, wy);
-        const hR = this.sampleSmooth(wx + 8, wy);
-        const hD = this.sampleSmooth(wx, wy + 8);
-        const slope = (h - hR) * 1.1 + (h - hD) * 1.1;
+        const hR = this.sampleSmooth(wx + 6, wy);
+        const hD = this.sampleSmooth(wx, wy + 6);
+        const slope = (h - hR) * 1.25 + (h - hD) * 1.25;
+
+        // Deterministic crisp micro-grain (matches pixel-art building/unit detail!)
+        const n = (((x * 374761393 + y * 668265263) ^ (x * y * 1274126177)) >>> 0) % 256;
+        const grain = (n / 255 - 0.5) * 0.11;
 
         let r: number;
         let g: number;
         let b: number;
 
-        if (h < -0.22) {
-          const f = 0.86 + Math.max(-0.18, h * 0.16);
+        if (h < -0.2) {
+          // Deep ocean / river with crisp horizontal wave shimmer bands
+          const wave = Math.sin(wx * 0.14 + Math.sin(wy * 0.08) * 2.2) * Math.cos(wy * 0.24) * 0.09;
+          const f = 0.84 + Math.max(-0.16, h * 0.14) + wave + grain * 0.4;
           r = wr * f;
-          g = wg * f;
-          b = wb * f;
-        } else if (h < -0.04) {
-          // Coastal turquoise shoal
-          const t = (h + 0.22) / 0.18;
-          r = wr * (0.9 + t * 0.45);
-          g = wg * (1.0 + t * 0.55);
-          b = wb * (1.05 + t * 0.45);
-        } else if (h < 0) {
-          // Soft shoreline foam
-          r = 188;
-          g = 224;
-          b = 232;
+          g = wg * (f + 0.04);
+          b = wb * (f + 0.08);
+        } else if (h < -0.03) {
+          // Crisp turquoise coastal shoal with fine ripples
+          const t = (h + 0.2) / 0.17;
+          const ripple = Math.sin(wx * 0.2 + wy * 0.28) * 0.06;
+          r = wr * (0.9 + t * 0.48 + ripple);
+          g = wg * (1.04 + t * 0.56 + ripple);
+          b = wb * (1.08 + t * 0.46 + ripple);
+        } else if (h < 0.005) {
+          // Crisp shoreline surf foam
+          const foam = 0.94 + grain * 0.6;
+          r = 212 * foam;
+          g = 238 * foam;
+          b = 244 * foam;
         } else if (h < 0.09) {
-          // Warm sandy beach
-          r = 198;
-          g = 173;
-          b = 124;
+          // Textured warm sandy shore
+          const sand = 1.0 + grain * 0.9 + slope * 0.2;
+          r = 202 * sand;
+          g = 176 * sand;
+          b = 128 * sand;
         } else if (h < 0.34) {
-          // Flat buildable sunlit meadow
-          const f = 1.13 + slope * 0.15;
+          // Flat buildable sunlit meadow with subtle grass texture
+          const tuft = (n % 19 === 0 ? -0.07 : n % 23 === 0 ? 0.06 : 0);
+          const f = 1.13 + slope * 0.18 + grain * 0.75 + tuft;
           r = gr * f;
           g = gg * f;
           b = gb * f;
         } else if (h < 1.18) {
-          // Undulating hills with smooth directional northwest sunlight shading
-          const f = Math.max(0.7, Math.min(1.3, 0.96 + slope * 0.72 + (h - 0.52) * 0.12));
+          // Undulating hills with directional northwest hill-shading & grass/earth texture
+          const contour = Math.abs((h * 8) % 1 - 0.5) < 0.04 ? -0.045 : 0;
+          const f = Math.max(0.68, Math.min(1.32, 0.96 + slope * 0.78 + (h - 0.52) * 0.12 + grain * 0.85 + contour));
           r = gr * f;
           g = gg * f;
           b = gb * f;
         } else if (h < 1.5) {
-          // Rocky mountain crags
-          const f = Math.max(0.68, Math.min(1.28, 0.95 + slope * 0.85));
-          r = 112 * f;
-          g = 100 * f;
-          b = 88 * f;
+          // Craggy granite mountain slopes with stone speckle
+          const f = Math.max(0.62, Math.min(1.3, 0.94 + slope * 0.95 + grain * 1.4));
+          r = 116 * f;
+          g = 104 * f;
+          b = 92 * f;
         } else {
-          // Snow-capped mountain peak
-          const f = Math.max(0.85, Math.min(1.12, 1.0 + slope * 0.35));
-          r = 224 * f;
-          g = 220 * f;
-          b = 208 * f;
+          // Snow-capped mountain peaks with crisp facet shading
+          const f = Math.max(0.84, Math.min(1.14, 1.0 + slope * 0.42 + grain * 0.5));
+          r = 228 * f;
+          g = 224 * f;
+          b = 214 * f;
         }
 
         const p = (y * rw + x) * 4;
@@ -352,7 +366,7 @@ export class PlanetTerrain {
     ctx.imageSmoothingEnabled = true;
     ctx.drawImage(off, 0, 0, WORLD_W, WORLD_H);
 
-    // Subtle flat village paths radiating from center
+    // Subtle packed-earth village paths radiating from center
     ctx.strokeStyle = 'rgba(155, 128, 84, 0.22)';
     ctx.lineWidth = 10;
     ctx.lineCap = 'round';

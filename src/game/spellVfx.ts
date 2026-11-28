@@ -104,6 +104,109 @@ export function playTeleportVfx(scene: Phaser.Scene, fromX: number, fromY: numbe
   }
 }
 
+export interface AngelOfDeathActor {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  remaining: number;
+  breathTimer: number;
+  phase: number;
+  container: Phaser.GameObjects.Container;
+  shadow: Phaser.GameObjects.Ellipse;
+  leftWing: Phaser.GameObjects.Polygon;
+  rightWing: Phaser.GameObjects.Polygon;
+}
+
+/** Summons a flying, fire-breathing winged serpentine dragon inspired by Populous: The Beginning's Angel of Death! */
+export function createAngelOfDeathVfx(scene: Phaser.Scene, x: number, y: number): AngelOfDeathActor {
+  const shadow = scene.add.ellipse(x, y + 8, 52, 20, 0x000000, 0.36).setDepth(y - 4);
+  const container = scene.add.container(x, y - 58).setDepth(965);
+
+  const gfx = scene.add.graphics();
+  // Spiked serpentine tail & crimson-obsidian dragon torso
+  gfx.lineStyle(5, 0x3b0d11, 1);
+  gfx.beginPath();
+  gfx.moveTo(-28, 12);
+  gfx.lineTo(-14, 6);
+  gfx.lineTo(0, 0);
+  gfx.lineTo(14, -4);
+  gfx.strokePath();
+  gfx.lineStyle(2.5, 0x9b2226, 1);
+  gfx.beginPath();
+  gfx.moveTo(-26, 11);
+  gfx.lineTo(12, -3);
+  gfx.strokePath();
+
+  // Winged dragon body & horned head
+  const body = scene.add.ellipse(0, 0, 30, 14, 0x5c1116, 1).setStrokeStyle(1.5, 0x1f0709);
+  const head = scene.add.polygon(17, -4, [-6, -5, 10, -2, 12, 3, -4, 5], 0x78141c, 1).setStrokeStyle(1.5, 0x1f0709);
+  const horn1 = scene.add.triangle(15, -10, 0, 5, 4, -5, 7, 5, 0xd4a373, 1);
+  const eye = scene.add.circle(21, -5, 2.2, 0xffd166, 1);
+  const aura = scene.add.circle(0, 0, 26, 0xff5400, 0.14).setStrokeStyle(1.5, 0xff9f1c, 0.55);
+
+  // Articulated bat-like leathery wings that flap every frame!
+  const leftWing = scene.add.polygon(-2, -6, [0, 0, -24, -26, -6, -20, 10, -24, 6, -4], 0x8f1d21, 0.94).setStrokeStyle(1.5, 0x2a080a);
+  const rightWing = scene.add.polygon(-2, 6, [0, 0, -22, 24, -4, 18, 10, 22, 6, 4], 0x6b1216, 0.94).setStrokeStyle(1.5, 0x2a080a);
+
+  container.add([aura, leftWing, rightWing, gfx, body, head, horn1, eye]);
+
+  // Dramatic ground eruption ring on summon
+  const burst = scene.add.circle(x, y, 16, 0xff5400, 0.45).setStrokeStyle(3, 0xffd166, 0.95).setDepth(950);
+  scene.tweens.add({ targets: burst, radius: 74, alpha: 0, duration: 520, onComplete: () => burst.destroy() });
+
+  return {
+    x,
+    y,
+    vx: 68,
+    vy: -24,
+    remaining: 26,
+    breathTimer: 0.4,
+    phase: 0,
+    container,
+    shadow,
+    leftWing,
+    rightWing,
+  };
+}
+
+/** Roaring dragon fire-breath cone from the flying Angel of Death onto a target unit or hut. */
+export function playDragonFireBreathVfx(scene: Phaser.Scene, sx: number, sy: number, tx: number, ty: number): void {
+  for (let i = 0; i < 6; i++) {
+    scene.time.delayedCall(i * 45, () => {
+      const puff = scene.add.circle(sx, sy, 5 + i * 1.2, i % 2 === 0 ? 0xff5400 : 0xffd166, 0.92).setDepth(968);
+      scene.tweens.add({
+        targets: puff,
+        x: tx + Phaser.Math.Between(-16, 16),
+        y: ty + Phaser.Math.Between(-12, 12),
+        scale: 2.2,
+        alpha: 0,
+        duration: 260,
+        ease: 'Quad.easeOut',
+        onComplete: () => puff.destroy(),
+      });
+    });
+  }
+}
+
+export function playWaterSplashVfx(scene: Phaser.Scene, x: number, y: number): void {
+  const ring = scene.add.ellipse(x, y, 12, 6, 0x90e0ef, 0.45).setStrokeStyle(2, 0xe0fbfc, 0.95).setDepth(920);
+  scene.tweens.add({ targets: ring, scaleX: 3.0, scaleY: 2.6, alpha: 0, duration: 480, onComplete: () => ring.destroy() });
+  for (let i = 0; i < 6; i++) {
+    const drop = scene.add.circle(x, y, 2.5, 0xcaf0f8, 0.95).setDepth(925);
+    const ang = (i / 6) * Math.PI * 2;
+    scene.tweens.add({
+      targets: drop,
+      x: x + Math.cos(ang) * 20,
+      y: y - 16 + Math.sin(ang) * 10,
+      alpha: 0,
+      duration: 380,
+      ease: 'Quad.easeOut',
+      onComplete: () => drop.destroy(),
+    });
+  }
+}
+
 export function createHazardVfx(
   scene: Phaser.Scene,
   kind: ActiveHazard['kind'],
@@ -138,11 +241,56 @@ export function createHazardVfx(
       container.add(ring);
     }
   } else if (kind === 'volcano') {
-    remaining = 6.0;
-    scene.cameras.main.shake(300, 0.01);
-    const cone = scene.add.polygon(0, 0, [-48, 22, -16, -34, 16, -34, 48, 22], 0x4a2c1d, 0.95).setStrokeStyle(2, 0x26140c);
-    const lava = scene.add.ellipse(0, -34, 28, 12, 0xff5400, 0.95);
-    container.add([cone, lava]);
+    remaining = 7.5;
+    scene.cameras.main.shake(340, 0.011);
+    const gfx = scene.add.graphics();
+    // Ground scorch shadow
+    gfx.fillStyle(0x1a0c06, 0.55);
+    gfx.fillEllipse(0, 26, 132, 46);
+    // Shaded jagged volcanic mountain silhouette (lit left slope + shadowed right basalt slope)
+    gfx.fillStyle(0x4b3022, 1);
+    gfx.fillPoints([
+      new Phaser.Geom.Point(-64, 24),
+      new Phaser.Geom.Point(-42, -4),
+      new Phaser.Geom.Point(-22, -44),
+      new Phaser.Geom.Point(0, -48),
+      new Phaser.Geom.Point(0, 28),
+    ], true);
+    gfx.fillStyle(0x2d1a12, 1);
+    gfx.fillPoints([
+      new Phaser.Geom.Point(0, -48),
+      new Phaser.Geom.Point(22, -44),
+      new Phaser.Geom.Point(44, -2),
+      new Phaser.Geom.Point(64, 24),
+      new Phaser.Geom.Point(0, 28),
+    ], true);
+    gfx.lineStyle(2, 0x1a0c06, 0.9);
+    gfx.strokePoints([
+      new Phaser.Geom.Point(-64, 24),
+      new Phaser.Geom.Point(-42, -4),
+      new Phaser.Geom.Point(-22, -44),
+      new Phaser.Geom.Point(22, -44),
+      new Phaser.Geom.Point(44, -2),
+      new Phaser.Geom.Point(64, 24),
+    ], false);
+    // Glowing molten magma rivers & cracks streaming down the cone!
+    gfx.lineStyle(3.5, 0xff4500, 0.95);
+    gfx.beginPath();
+    gfx.moveTo(-6, -42); gfx.lineTo(-14, -18); gfx.lineTo(-26, 10); gfx.lineTo(-34, 24);
+    gfx.moveTo(8, -42); gfx.lineTo(18, -14); gfx.lineTo(12, 6); gfx.lineTo(24, 24);
+    gfx.strokePath();
+    gfx.lineStyle(1.6, 0xffd166, 0.95);
+    gfx.beginPath();
+    gfx.moveTo(-6, -42); gfx.lineTo(-14, -18); gfx.lineTo(-26, 10);
+    gfx.moveTo(8, -42); gfx.lineTo(18, -14); gfx.lineTo(12, 6);
+    gfx.strokePath();
+
+    // Glowing molten caldera rim + rising ash plume
+    const calderaGlow = scene.add.ellipse(0, -45, 50, 20, 0xff5400, 0.45);
+    const calderaCore = scene.add.ellipse(0, -45, 34, 12, 0xffd166, 0.95);
+    const smoke1 = scene.add.circle(-8, -64, 14, 0x2b2420, 0.48);
+    const smoke2 = scene.add.circle(10, -76, 18, 0x3b322c, 0.36);
+    container.add([gfx, calderaGlow, calderaCore, smoke1, smoke2]);
   }
 
   return { kind, x, y, vx, vy, radius, remaining, tickAccum: 0, container, phase: 0 };

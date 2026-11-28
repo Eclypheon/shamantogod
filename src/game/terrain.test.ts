@@ -22,10 +22,32 @@ describe('Periodic Globe Terrain & Land Spells', () => {
     expect(t.isWalkable(sx, sy)).toBe(true);
     expect(t.isFlat(sx, sy)).toBe(false);
 
-    // Flatten spell levels it into flat buildable meadow
-    const changed = t.flattenArea(sx, sy, 60);
-    expect(changed).toBeGreaterThan(0);
+    // Flatten spell cast on flat Shaman clearing spreads flat altitude to neighboring hills
+    const res = t.flattenArea(WORLD_W / 2, WORLD_H / 2, 110);
+    expect(res.changed).toBeGreaterThan(0);
     expect(t.isFlat(sx, sy)).toBe(true);
+  });
+
+  it('Flatten adopts exact altitude at cast point (water spreads water, mountain spreads mountain)', () => {
+    const t = new PlanetTerrain(5);
+    // Find a water cell in the river
+    let riverX = -1;
+    for (let x = WORLD_W / 2 + 120; x <= WORLD_W / 2 + 340; x += 10) {
+      if (t.isWater(x, WORLD_H / 2)) {
+        riverX = x;
+        break;
+      }
+    }
+    expect(riverX).toBeGreaterThan(0);
+    // Cast Flatten in water -> expands water onto nearby shore!
+    const waterRes = t.flattenArea(riverX, WORLD_H / 2, 70);
+    expect(waterRes.targetH).toBeLessThan(0);
+    expect(t.isWater(riverX - 50, WORLD_H / 2)).toBe(true);
+
+    // Cast Flatten on a high point -> raises neighbors to that mountain altitude!
+    const mRes = t.flattenArea(WORLD_W / 2, WORLD_H / 2, 50, 1.45);
+    expect(mRes.targetH).toBeGreaterThanOrEqual(1.18);
+    expect(t.isMountain(WORLD_W / 2 + 25, WORLD_H / 2)).toBe(true);
   });
 
   it('carves rivers on Planet 5+ that block walking until Landbridge raises a walkable crossing', () => {

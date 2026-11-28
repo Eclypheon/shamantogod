@@ -11,6 +11,7 @@ import {
   findNearestClusterCentroid,
   formAlliance,
   getCastRangePx,
+  getEnemyScaling,
   getMaxHutsForPop,
   getMaxTrainingBuildings,
   getRoleUnitCap,
@@ -241,6 +242,17 @@ describe('Shaman to God simulation', () => {
     expect(center).not.toBeNull();
     expect(Math.round(center!.x)).toBe(110);
     expect(Math.round(center!.y)).toBe(110);
+  });
+
+  it('scales enemy HP, hut durability, and raid intensity exponentially on later planets', () => {
+    const s1 = getEnemyScaling(1);
+    const s6 = getEnemyScaling(6);
+    const s15 = getEnemyScaling(15);
+    expect(s1.hpMult).toBe(1);
+    expect(s6.hpMult).toBeGreaterThan(2.5);
+    expect(s15.hpMult).toBeGreaterThan(15);
+    expect(s15.hutHpMult).toBeGreaterThan(s15.hpMult);
+    expect(s15.maxHostile).toBeGreaterThan(s1.maxHostile);
   });
 
   it('safely hydrates partial or older saved states without missing planets', () => {

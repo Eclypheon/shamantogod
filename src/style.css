@@ -73,7 +73,7 @@ html, body, #app, #game-container {
 .ribbon-right {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   min-width: 0;
   flex-shrink: 0;
 }
@@ -84,13 +84,35 @@ html, body, #app, #game-container {
 
 .planet-title {
   font-family: var(--font-display);
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 700;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.02em;
   color: var(--ink);
-  max-width: 118px;
+  max-width: 104px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Floating active buff pills right beneath top-left of ribbon so top bar NEVER overflows */
+.buffs-float {
+  position: fixed;
+  top: calc(var(--safe-t) + 38px);
+  left: var(--safe-l);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  pointer-events: none;
+  z-index: 12;
+}
+
+.buffs-float .buff-pill {
+  background: rgba(34, 22, 12, 0.86);
+  color: #f4e6c4;
+  border: 1px solid var(--bronze-hi);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 9.5px;
+  font-weight: 700;
 }
 
 .dom-track {
@@ -137,11 +159,11 @@ html, body, #app, #game-container {
 
 .btn {
   font-family: var(--font-display);
-  font-size: 9.5px;
+  font-size: 9px;
   font-weight: 700;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.02em;
   text-transform: uppercase;
-  padding: 4px 7px;
+  padding: 3px 6px;
   border-radius: 4px;
   border: 1px solid var(--bronze);
   background: linear-gradient(180deg, #efe0bc 0%, #d4b882 100%);
@@ -263,12 +285,53 @@ html, body, #app, #game-container {
   z-index: 12;
 }
 
+/* Spell category pill row (keeps dock to 1 clean row even when all 20 spells are unlocked!) */
+.spell-header-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  pointer-events: none;
+}
+
+.spell-cats {
+  display: none;
+  align-items: center;
+  gap: 3px;
+  pointer-events: auto;
+  flex-shrink: 0;
+}
+
+.spell-cats.visible {
+  display: flex;
+}
+
+.spell-cat-btn {
+  font-family: var(--font-display);
+  font-size: 8.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 3px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--bronze);
+  background: linear-gradient(180deg, #f4e6c4 0%, #d8bd88 100%);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.spell-cat-btn.active {
+  background: linear-gradient(180deg, #5c3d1e 0%, #3a2410 100%);
+  color: #f8eccb;
+  border-color: var(--bronze-hi);
+}
+
 /* Active spell clarity strip right above the spell dock */
 .spell-info {
   max-width: 100%;
-  padding: 3px 9px;
+  min-width: 0;
+  padding: 3px 8px;
   border-radius: 5px;
-  font-size: 11px;
+  font-size: 10.5px;
   color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
